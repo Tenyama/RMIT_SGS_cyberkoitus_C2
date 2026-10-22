@@ -16,3 +16,40 @@ services:
       KC_BOOTSTRAP_ADMIN_PASSWORD: admin
       KC_HEALTH_ENABLED: "true"
       KC_METRICS_ENABLED: "true"
+  server:
+    image: node:18
+    depends_on: [tidecloak, lgtm]
+    working_dir: /app/server
+    command: sh -c "npm ci && npx tsx src/index.ts"
+    ports: ["4000:4000", "5137:5137"] # 5137 belongs to web, which shares this network namespace
+    volumes:
+      - ./server:/app/server
+      - ./shared:/app/shared:ro
+      - server_node_modules:/app/server/node_modules # linux-built better-sqlite3, not the host's
+    environment:
+      PORT: "4000"
+      TIDECLOAK_URL: http://tidecloak:8080
+      REALM: tidewatch
+      CLIENT_ID: tidewatch-app
+      SA_CLIENT_ID: tidewatch-sa
+      SA_CLIENT_SECRET: ${SA_CLIENT_SECRET:-}
+      PROM_URL: http://lgtm:9090
+      HMAC_KEY: ${HMAC_KEY:-dev-only-change-me}
+      DB_PATH: ./data/tidewatch.db
+      SIMULATOR: ${SIMULATOR:-on}
+      TIME_SCALE: ${TIME_SCALE:-1}
+      AUTH_MODE: ${AUTH_MODE:-jwt}
+  web:
+    image: node:18
+    depends_on: [server]
+    working_dir: /app/web
+    # shares server's netns so vite.config.js's "/api" -> localhost:4000 proxy works unchanged
+    network_mode: "service:server"
+    command: sh -c "npm ci && npx vite --host 0.0.0.0 --port 5137 --strictPort"
+    volumes:
+      - ./web:/app/web
+      - ./shared:/app/shared:ro
+      - web_node_modules:/app/web/node_modules
+volumes:
+  server_node_modules:
+  web_node_modules:
