@@ -10,7 +10,7 @@ Types: `shared/types.ts`. Schema: `server/schema.sql`. Design: `docs/DESIGN.md`.
 | D3 | Realm = `test1` (already Tide-licensed, IGA on) | `tidewatch` licence setup failed on Tide's ORK network `[measured]` |
 | D4 | Agents are TideCloak confidential clients; they call our HTTP API with their own token | Enforcement must not trust in-process callers |
 | D5 | Quantities/limits are deterministic; Claude only chooses supplier among offers, writes text, and may *propose* bad things | LLM is never the authority |
-| D6 | LLM = `@anthropic-ai/sdk`, model env `LLM_MODEL` default `claude-opus-5-5`, `output_config.effort: "low"`, structured output via `client.messages.parse` + `zodOutputFormat`; `LLM_MODE=off` or missing key → deterministic stub text | Anthropic tokens available; demo must not die without them |
+| D6 | LLM layer = pluggable `Reasoner` interface (`server/src/llm.ts`); MVP ships a deterministic rule-based reasoner only (no API key available). It must still be able to *simulate a compromised model* (follow an injected supplier note) so the policy engine is demonstrably the authority | No Anthropic key; demo must not depend on a network LLM |
 | D7 | Exception approval = IGA CR "GRANT `proc.exception-submit` → agent-planner" opened by `tidewatch-sa`; IGA status `APPROVED`/`COMMITTED` = approved, `DENIED` = rejected | Uses Tide quorum, not an app table |
 | D8 | `AUTH_MODE=dev` accepts `X-Dev-Sub` + `X-Dev-Roles` (comma list); agents in dev mode send their role via these headers | Tests/offline |
 | D9 | Realm role/grant calls may return **202 or 204 with a CR created**; after any 2xx, look up the newest PENDING CR for that entity to get its id | Measured on `test1` |
@@ -18,7 +18,7 @@ Types: `shared/types.ts`. Schema: `server/schema.sql`. Design: `docs/DESIGN.md`.
 ## Env (server)
 `PORT=4000 TIDECLOAK_URL=http://localhost:8080 REALM=test1 AUTH_MODE=jwt|dev HMAC_KEY DB_PATH=./data/procure.db`
 `SA_CLIENT_ID=tidewatch-sa SA_CLIENT_SECRET` · `AGENT_ANALYST_SECRET AGENT_PLANNER_SECRET AGENT_EXCEPTION_SECRET`
-`ANTHROPIC_API_KEY LLM_MODEL=claude-opus-5-5 LLM_MODE=on|off API_BASE=http://localhost:4000`
+`API_BASE=http://localhost:4000`
 Load with `set -a; . ./.env; set +a` (no dotenv).
 
 ## Ownership

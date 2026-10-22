@@ -18,7 +18,7 @@ AI agents automate routine building-materials procurement; TideCloak makes their
 | Layer | Does | Trust |
 |---|---|---|
 | Deterministic replenishment (`replenish.ts`) | Reorder point = demand × lead time + safety stock; order-up-to qty | Trusted math |
-| 3 Claude agents | Analyst explains risk · Planner picks supplier + drafts PO · Exception analyst explains blocked POs | **Untrusted** — proposals only |
+| 3 agents (rule-based reasoner, LLM-pluggable) | Analyst explains risk · Planner picks supplier + drafts PO · Exception analyst explains blocked POs | **Untrusted** — proposals only |
 | Policy engine (`policy.ts`) | Per call: verify token → role → permission → business rules | Enforcer |
 | TideCloak (realm `test1`) | Identities for humans **and** agents, roles, IGA quorum for exceptions | Root of authority, no single admin can grant |
 
@@ -33,7 +33,7 @@ AI agents automate routine building-materials procurement; TideCloak makes their
  │ policy.ts role→permission→rules (PEP)    │──── tidewatch-sa: open CR "grant
  │ routes    /api/inventory /po /audit ...  │     proc.exception-submit to agent-planner"
  │ agents/   analyst · planner · exception  │──── HTTP to OUR OWN API with THEIR OWN token
- │   └─ Anthropic SDK (Claude) structured   │
+ │   └─ Reasoner (rules; LLM pluggable)     │
  │ governance.ts poll CR → approved → retry │
  │ SQLite + audit hash-chain · SSE          │
  └──────────────────────────────────────────┘
@@ -54,14 +54,14 @@ Agents run in-process but **call the HTTP API like any external client**, each w
 ```
 buyer clicks "Run agents" ─► POST /api/agents/run (proc.buyer)
 1 Analyst  [token agent-analyst]  GET /api/inventory → recommendations (deterministic)
-           Claude → {sku, risk, rationale}[]                       ─► SSE agent.log
-2 Planner  [token agent-planner]  GET /api/suppliers?sku → Claude picks {supplier, qty, justification}
+           reasoner → {sku, risk, rationale}[]                       ─► SSE agent.log
+2 Planner  [token agent-planner]  GET /api/suppliers?sku → reasoner picks {supplier, qty, justification}
            POST /api/po (draft) → POST /api/po/:id/submit
            policy.ts: role ✓ supplier_approved? price ±20%? qty ≤ 3×rec? total ≤ 10M? daily ≤ 30M?
              all ok            → executed (on_order += qty)        ─► SSE po.updated
              hard violation    → blocked
              over 10M / daily  → pending_approval + IGA CR (via tidewatch-sa)
-3 Exception [token agent-exception] for blocked/pending → Claude → ExceptionReport → POST exception-report
+3 Exception [token agent-exception] for blocked/pending → reasoner → ExceptionReport → POST exception-report
 4 Approvers approve CR in TideCloak (enclave) ─► governance.ts sees APPROVED
            planner fetches a fresh token (now has proc.exception-submit) → re-submit
            policy: quorum ✓ for THIS po_id, exception_used=0 → executed, exception_used=1
