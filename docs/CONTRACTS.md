@@ -13,6 +13,7 @@ Types: `shared/types.ts`. Schema: `server/schema.sql`. Design: `docs/DESIGN.md`.
 | D6 | LLM layer = pluggable `Reasoner` interface (`server/src/llm.ts`); MVP ships a deterministic rule-based reasoner only (no API key available). It must still be able to *simulate a compromised model* (follow an injected supplier note) so the policy engine is demonstrably the authority | No Anthropic key; demo must not depend on a network LLM |
 | D7 | Exception approval = IGA CR "GRANT `proc.exception-submit` → agent-planner" opened by `tidewatch-sa`; IGA status `APPROVED`/`COMMITTED` = approved, `DENIED` = rejected | Uses Tide quorum, not an app table |
 | D8 | `AUTH_MODE=dev` accepts `X-Dev-Sub` + `X-Dev-Roles` (comma list); agents in dev mode send their role via these headers | Tests/offline |
+| D10 | Hard failures (role, supplier_approved, price_sanity) → blocked; soft failures (qty_sanity, po_limit, daily_limit) → pending_approval, overridable once by quorum | Otherwise an 80M order from an approved supplier could never be escalated |
 | D9 | Realm role/grant calls may return **202 or 204 with a CR created**; after any 2xx, look up the newest PENDING CR for that entity to get its id | Measured on `test1` |
 
 ## Env (server)
@@ -46,6 +47,8 @@ Load with `set -a; . ./.env; set +a` (no dotenv).
 | GET | `/audit` | audit:read | P1 |
 | GET | `/stream` | any (`?access_token=` or dev query) | P1 |
 | GET | `/change-requests` | APPROVER | P3 |
+| POST | `/demo/reset`, `/demo/attack` | demo:inject | P1 |
+| POST | `/demo/approve/:id` | dev mode only — stands in for the quorum | orchestrator |
 | GET | `/health` | none | P1 |
 
 ## Module seams (compile independently; missing modules are optional imports)
