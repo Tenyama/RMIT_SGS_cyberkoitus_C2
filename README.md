@@ -64,6 +64,12 @@ Open http://localhost:5137. Awaiting-quorum cards show **Simulate quorum approva
 
 ### B. Real Tide mode (agents with TideCloak tokens, real change requests)
 
+**Fast path (team members):** `demo-bundle/procureguard-demo.tar.gz.enc` is an AES-256 encrypted snapshot of our configured TideCloak realm plus the app's `.env`. Ask the team for the passphrase (never committed), then run:
+```bash
+scripts/restore-demo.sh      # decrypts, starts TideCloak on :8080 with realm test1, writes .env, installs deps
+```
+Without the passphrase, set up your own realm as below.
+
 1. Start TideCloak: `docker compose up -d tidecloak` (admin console http://localhost:8080, admin/admin), then create or license a Tide realm.
 2. Configure the realm by following [infra/realm/README.md](infra/realm/README.md):
    - realm roles `agent.analyst`, `agent.planner`, `agent.exception`, `proc.exception-submit`, `proc.buyer`, `proc.auditor`;
