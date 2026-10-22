@@ -1,0 +1,7 @@
+.env*
+procureguard-bundle-lite
+demo-bundle
+**/node_modules
+**/dist
+server/data
+*.db

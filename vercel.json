@@ -1,0 +1,16 @@
+{
+  "services": {
+    "web": {
+      "root": "web/",
+      "framework": "vite"
+    },
+    "api": {
+      "root": "./",
+      "entrypoint": "Dockerfile.vercel"
+    }
+  },
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": { "service": "api" } },
+    { "source": "/(.*)", "destination": { "service": "web" } }
+  ]
+}
