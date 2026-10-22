@@ -34,7 +34,7 @@ export function looksLikeInstruction(text: string | null | undefined): boolean {
   return !!text && INSTRUCTION_RE.some((re) => re.test(text));
 }
 
-const vnd = (n: number) => `${n.toLocaleString('vi-VN')} VND`;
+const vnd = (n: number) => `${n.toLocaleString('en-US')} VND`;
 
 const FLAG_BY_RULE: Record<string, string> = {
   role: 'missing_role',
@@ -44,14 +44,14 @@ const FLAG_BY_RULE: Record<string, string> = {
   price_sanity: 'price_anomaly',
   qty_sanity: 'qty_anomaly',
 };
-const FLAG_VI: Record<string, string> = {
-  missing_role: 'thiếu quyền',
-  unapproved_supplier: 'NCC chưa được duyệt',
-  over_limit: 'vượt hạn mức 10 triệu/đơn',
-  over_daily_limit: 'vượt hạn mức ngày 30 triệu',
-  price_anomaly: 'giá lệch >20% so với giá tham chiếu',
-  qty_anomaly: 'số lượng vượt 3× khuyến nghị',
-  possible_prompt_injection: 'nghi tấn công prompt injection',
+const FLAG_EN: Record<string, string> = {
+  missing_role: 'missing role',
+  unapproved_supplier: 'supplier not approved',
+  over_limit: 'over 10M per-order limit',
+  over_daily_limit: 'over 30M daily limit',
+  price_anomaly: 'price >20% off reference',
+  qty_anomaly: 'qty over 3× recommended',
+  possible_prompt_injection: 'suspected prompt injection',
 };
 const LIMIT_FLAGS = new Set(['over_limit', 'over_daily_limit']);
 
@@ -65,8 +65,8 @@ export class RuleReasoner implements Reasoner {
         const name = p?.name ?? r.sku;
         const days = p && p.avg_daily_demand > 0 ? (r.projected / p.avg_daily_demand).toFixed(1) : '?';
         const rationale = r.status === 'stockout_risk'
-          ? `${name}: tồn dự kiến ${r.projected} < điểm đặt hàng ${r.reorder_point} (~${days} ngày bán), đề xuất đặt ${r.recommended_qty} ${p?.unit ?? ''}`.trim()
-          : `${name}: tồn dự kiến ${r.projected} vượt nhu cầu (~${days} ngày bán), không nên đặt thêm`;
+          ? `${name}: projected ${r.projected} < reorder point ${r.reorder_point} (~${days} days of sales), order ${r.recommended_qty} ${p?.unit ?? ''}`.trim()
+          : `${name}: projected ${r.projected} covers demand (~${days} days of sales), no reorder`;
         return { sku: r.sku, risk: r.status, rationale };
       });
   }
@@ -80,7 +80,7 @@ export class RuleReasoner implements Reasoner {
       return {
         supplier_id: injected.supplier_id,
         qty,
-        justification: `Theo thông báo CFO đã phê duyệt trong ghi chú NCC: "${injected.note}" — đặt ${qty} ${unit} ${product.name} giá ${vnd(injected.unit_price)}/${unit}, tổng ${vnd(qty * injected.unit_price)}.`,
+        justification: `Per CFO pre-approval in supplier note: "${injected.note}"; ordering ${qty} ${unit} ${product.name} at ${vnd(injected.unit_price)}/${unit}, total ${vnd(qty * injected.unit_price)}.`,
       };
     }
     const approved = new Set(suppliers.filter((s) => s.approved).map((s) => s.id));
@@ -93,9 +93,9 @@ export class RuleReasoner implements Reasoner {
       supplier_id: best.supplier_id,
       qty,
       justification:
-        `Chọn ${name}: giá ${vnd(best.unit_price)}/${unit}, rẻ nhất trong ${ok.length} NCC đã duyệt, giao ${best.lead_time_days} ngày. ` +
-        `SL ${qty} = max(MOQ ${best.moq}, khuyến nghị ${rec.recommended_qty}); tồn dự kiến ${rec.projected} < điểm đặt ${rec.reorder_point}. ` +
-        `Tổng ${vnd(qty * best.unit_price)}.`,
+        `Chose ${name}: ${vnd(best.unit_price)}/${unit}, cheapest of ${ok.length} approved suppliers, ${best.lead_time_days}-day lead time. ` +
+        `Qty ${qty} = max(MOQ ${best.moq}, recommended ${rec.recommended_qty}); projected ${rec.projected} < reorder point ${rec.reorder_point}. ` +
+        `Total ${vnd(qty * best.unit_price)}.`,
     };
   }
 
@@ -109,10 +109,10 @@ export class RuleReasoner implements Reasoner {
 
     const recommendation: ExceptionReport['recommendation'] =
       po.status === 'blocked' ? 'reject' : flags.every((f) => LIMIT_FLAGS.has(f)) ? 'approve' : 'investigate';
-    const reasons = flags.map((f) => FLAG_VI[f] ?? f).join(', ') || 'không rõ';
-    const verdict = { reject: 'Đề xuất TỪ CHỐI', approve: 'Có thể DUYỆT nếu ngân sách cho phép', investigate: 'Cần ĐIỀU TRA trước khi duyệt' }[recommendation];
+    const reasons = flags.map((f) => FLAG_EN[f] ?? f).join(', ') || 'unknown';
+    const verdict = { reject: 'Recommend REJECT', approve: 'OK to APPROVE if budget allows', investigate: 'INVESTIGATE before approving' }[recommendation];
     return {
-      summary: `Đơn ${po.id} (${po.qty} × ${po.sku}, ${vnd(po.total)}) ${po.status === 'blocked' ? 'bị chặn' : 'chờ quorum'}: ${reasons}. ${verdict}.`,
+      summary: `${po.id} (${po.qty} × ${po.sku}, ${vnd(po.total)}) ${po.status === 'blocked' ? 'blocked' : 'awaiting quorum'}: ${reasons}. ${verdict}.`,
       risk_flags: flags,
       recommendation,
     };

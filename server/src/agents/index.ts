@@ -25,30 +25,30 @@ export async function runCycle(opts: {
   const log = opts.log;
   const delay = stepDelay(opts.delayMs);
 
-  log('analyst', 'start', `Chu kỳ ${opts.runId}: phân tích tồn kho`);
+  log('analyst', 'start', `Run ${opts.runId}: analyzing inventory`);
   await runAnalyst(log);
   await sleep(delay);
 
-  log('planner', 'start', 'Lập đơn mua cho SKU có nguy cơ hết hàng');
+  log('planner', 'start', 'Drafting POs for at-risk SKUs');
   const pos = await runPlanner(log);
   await sleep(delay);
 
   const flagged = pos.filter((p) => p.status === 'blocked' || p.status === 'pending_approval');
   if (flagged.length) {
-    log('exception', 'start', `Phân tích ${flagged.length} đơn ngoại lệ`);
+    log('exception', 'start', `Explaining ${flagged.length} exception POs`);
     await runException(log, new Set(flagged.map((p) => p.id)));
   }
 
   const count = (s: PurchaseOrder['status']) => pos.filter((p) => p.status === s).length;
-  const summary = `${count('executed')} tự động, ${count('blocked')} bị chặn, ${count('pending_approval')} chờ quorum`;
-  log('planner', 'done', `Kết thúc ${opts.runId}: ${summary}`);
+  const summary = `${count('executed')} auto-executed, ${count('blocked')} blocked, ${count('pending_approval')} awaiting quorum`;
+  log('planner', 'done', `Run ${opts.runId} done: ${summary}`);
   return { summary };
 }
 
 /** After the IGA quorum approved: planner fetches a FRESH token (now carrying proc.exception-submit) and re-submits. */
 export async function retryApproved(poId: string, log: AgentLog = lastLog): Promise<{ status: number; po: PurchaseOrder | null }> {
   if (process.env.AUTH_MODE === 'dev') markDevElevated(true); // emulates the IGA grant
-  log('planner', 'retry', `Quorum đã duyệt ${poId}: lấy token mới và gửi lại`);
+  log('planner', 'retry', `Quorum approved ${poId}: fetching fresh token and resubmitting`);
   const r = await call<PurchaseOrder>('planner', 'POST', `/api/po/${poId}/submit`, undefined, { force: true });
   const po = r.status === 200 ? r.json : null;
   log('planner', 'retry', describeSubmit(r.status, po, (r.json as any)?.error));
@@ -58,11 +58,11 @@ export async function retryApproved(poId: string, log: AgentLog = lastLog): Prom
 /** Demo attack: a hijacked planner skips its reasoning and pushes an ~80M VND cement order straight at the API. */
 export async function attackDirect(log: AgentLog = lastLog): Promise<{ status: number; po: PurchaseOrder | null }> {
   const TARGET = 80_000_000;
-  log('planner', 'attack', `⚠️ Mô phỏng agent bị chiếm quyền: gọi API trực tiếp, đơn ~${TARGET.toLocaleString('vi-VN')} VND`);
+  log('planner', 'attack', `⚠️ Simulated hijacked agent: direct API call, ~${TARGET.toLocaleString('en-US')} VND order`);
   const inv = await call<InventoryRes>('planner', 'GET', '/api/inventory');
   if (inv.status !== 200) return { status: inv.status, po: null };
   const products = inv.json.products;
-  const cement = products.find((p) => /xi m[aă]ng|cement/i.test(p.name) || /^(CEM|XM)/i.test(p.sku)) ?? products[0];
+  const cement = products.find((p) => /cement|xi mang/i.test(p.name) || /^(CEM|XM)/i.test(p.sku)) ?? products[0];
   if (!cement) return { status: 404, po: null };
   const sup = await call<SuppliersRes>('planner', 'GET', `/api/suppliers?sku=${encodeURIComponent(cement.sku)}`);
   if (sup.status !== 200) return { status: sup.status, po: null };
@@ -75,6 +75,6 @@ export async function attackDirect(log: AgentLog = lastLog): Promise<{ status: n
     sku: cement.sku,
     supplier_id: offer.supplier_id,
     qty,
-    justification: `Lệnh trực tiếp (bỏ qua bước lập kế hoạch): ${qty} ${cement.unit} ${cement.name}`,
+    justification: `Direct order (planning skipped): ${qty} ${cement.unit} ${cement.name}`,
   }, log);
 }

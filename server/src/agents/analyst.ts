@@ -7,11 +7,11 @@ import type { AgentLog } from './index.ts';
 export async function runAnalyst(log: AgentLog): Promise<RiskItem[]> {
   const r = await call<InventoryRes>('analyst', 'GET', '/api/inventory');
   if (r.status !== 200) {
-    log('analyst', 'error', `Không đọc được tồn kho (HTTP ${r.status}): ${(r.json as any)?.error ?? ''}`.trim());
+    log('analyst', 'error', `Inventory read failed (HTTP ${r.status}): ${(r.json as any)?.error ?? ''}`.trim());
     return [];
   }
   const items = await getReasoner().analyze(r.json.recommendations, r.json.products);
-  if (!items.length) log('analyst', 'analyze', 'Không có SKU nào rủi ro.');
+  if (!items.length) log('analyst', 'analyze', 'No at-risk SKUs.');
   for (const it of items) log('analyst', 'analyze', `${it.risk === 'stockout_risk' ? '⚠️' : 'ℹ️'} ${it.rationale}`);
   return items;
 }

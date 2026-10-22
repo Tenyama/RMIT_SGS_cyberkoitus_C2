@@ -14,7 +14,7 @@ export interface SubmitCtx {
 
 export type PoForPolicy = Pick<PurchaseOrder, 'qty' | 'unit_price' | 'total'>;
 
-const vnd = (n: number) => `${n.toLocaleString('vi-VN')}đ`;
+const vnd = (n: number) => `${n.toLocaleString('en-US')} VND`;
 
 export function permissionsOf(roles: string[]): string[] {
   return [...new Set(roles.flatMap((r) => PERMISSIONS[r] ?? []))];
@@ -35,13 +35,13 @@ export function evaluateSubmit(
   const soft: boolean[] = [];
 
   const roleOk = permissionsOf(actor.roles).includes('po:submit');
-  checks.push({ rule: 'role', ok: roleOk, detail: roleOk ? `${actor.label} có quyền po:submit` : `${actor.label} không có quyền po:submit` });
+  checks.push({ rule: 'role', ok: roleOk, detail: roleOk ? `${actor.label} has po:submit` : `${actor.label} lacks po:submit` });
   hard.push(roleOk);
 
   const supOk = !!ctx.supplier?.approved;
   checks.push({
     rule: 'supplier_approved', ok: supOk,
-    detail: supOk ? `NCC ${ctx.supplier!.name} đã duyệt` : `NCC ${ctx.supplier?.name ?? '?'} chưa được duyệt`,
+    detail: supOk ? `Supplier ${ctx.supplier!.name} approved` : `Supplier ${ctx.supplier?.name ?? '?'} not approved`,
   });
   hard.push(supOk);
 
@@ -50,7 +50,7 @@ export function evaluateSubmit(
   const priceOk = dev <= POLICY.PRICE_TOLERANCE + 1e-9;
   checks.push({
     rule: 'price_sanity', ok: priceOk,
-    detail: `Đơn giá ${vnd(po.unit_price)} lệch ${(dev * 100).toFixed(0)}% so với giá tham chiếu ${vnd(ref)} (tối đa ±${POLICY.PRICE_TOLERANCE * 100}%)`,
+    detail: `Unit price ${vnd(po.unit_price)} is ${(dev * 100).toFixed(0)}% off reference ${vnd(ref)} (max ±${POLICY.PRICE_TOLERANCE * 100}%)`,
   });
   hard.push(priceOk);
 
@@ -60,27 +60,27 @@ export function evaluateSubmit(
   checks.push({
     rule: 'qty_sanity', ok: qtyOk,
     detail: rec === 0
-      ? `Hệ thống không khuyến nghị đặt thêm (khuyến nghị 0), yêu cầu ${po.qty}`
-      : `SL ${po.qty} ${qtyOk ? '≤' : '>'} ${POLICY.MAX_QTY_FACTOR}× khuyến nghị ${rec} (${maxQty})`,
+      ? `No reorder recommended (rec 0), requested ${po.qty}`
+      : `Qty ${po.qty} ${qtyOk ? '≤' : '>'} ${POLICY.MAX_QTY_FACTOR}× recommended ${rec} (${maxQty})`,
   });
   soft.push(qtyOk);
 
   const poOk = po.total <= POLICY.AGENT_PO_LIMIT;
-  checks.push({ rule: 'po_limit', ok: poOk, detail: `Tổng ${vnd(po.total)} ${poOk ? '≤' : '>'} hạn mức đơn ${vnd(POLICY.AGENT_PO_LIMIT)}` });
+  checks.push({ rule: 'po_limit', ok: poOk, detail: `Total ${vnd(po.total)} ${poOk ? '≤' : '>'} per-order limit ${vnd(POLICY.AGENT_PO_LIMIT)}` });
   soft.push(poOk);
 
   const dayTotal = ctx.dailySpent + po.total;
   const dayOk = dayTotal <= POLICY.AGENT_DAILY_LIMIT;
-  checks.push({ rule: 'daily_limit', ok: dayOk, detail: `Đã chi hôm nay ${vnd(ctx.dailySpent)} + ${vnd(po.total)} ${dayOk ? '≤' : '>'} hạn mức ngày ${vnd(POLICY.AGENT_DAILY_LIMIT)}` });
+  checks.push({ rule: 'daily_limit', ok: dayOk, detail: `Spent today ${vnd(ctx.dailySpent)} + ${vnd(po.total)} ${dayOk ? '≤' : '>'} daily limit ${vnd(POLICY.AGENT_DAILY_LIMIT)}` });
   soft.push(dayOk);
 
   if (hard.includes(false)) return { status: 'blocked', checks };
   if (soft.includes(false)) {
     if (ctx.quorumApproved) {
-      checks.push({ rule: 'quorum', ok: true, detail: 'Quorum TideCloak đã duyệt ngoại lệ cho đúng PO này (dùng 1 lần)' });
+      checks.push({ rule: 'quorum', ok: true, detail: 'TideCloak quorum approved an exception for this PO (single use)' });
       return { status: 'executed', checks };
     }
-    checks.push({ rule: 'quorum', ok: false, detail: 'Vượt thẩm quyền agent — cần quorum duyệt qua IGA' });
+    checks.push({ rule: 'quorum', ok: false, detail: 'Exceeds agent authority: needs IGA quorum approval' });
     return { status: 'pending_approval', checks };
   }
   return { status: 'executed', checks };

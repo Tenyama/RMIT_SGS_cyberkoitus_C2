@@ -100,7 +100,7 @@ describe('runCycle', () => {
     const ex = statuses.filter((s) => s === 'executed').length;
     const bl = statuses.filter((s) => s === 'blocked').length;
     const pe = statuses.filter((s) => s === 'pending_approval').length;
-    expect(res.summary).toBe(`${ex} tự động, ${bl} bị chặn, ${pe} chờ quorum`);
+    expect(res.summary).toBe(`${ex} auto-executed, ${bl} blocked, ${pe} awaiting quorum`);
     expect(api.pos.size).toBe(2); // SAND is ok -> no PO
     expect(log).toHaveBeenCalledWith('analyst', expect.any(String), expect.any(String));
     // each agent used its own identity
@@ -116,14 +116,14 @@ describe('runCycle', () => {
     const all = [...api.pos.values()];
     expect(all.every((p) => p.supplier_id === 'sup-buildfast' && p.qty === 2000)).toBe(true);
     expect(all.every((p) => p.status === 'blocked')).toBe(true);
-    expect(res.summary).toBe('0 tự động, 2 bị chặn, 0 chờ quorum');
+    expect(res.summary).toBe('0 auto-executed, 2 blocked, 0 awaiting quorum');
     for (const p of all) {
       expect(p.exception_report?.risk_flags).toEqual(expect.arrayContaining(['unapproved_supplier', 'possible_prompt_injection']));
       expect(p.exception_report?.recommendation).toBe('reject');
     }
     const msgs = log.mock.calls.map((c) => c[2]).join('\n');
-    expect(msgs).toContain('⛔ Bị chặn');
-    expect(msgs).toContain('NCC chưa được duyệt');
+    expect(msgs).toContain('⛔ Blocked');
+    expect(msgs).toContain('supplier not approved');
     const reportCalls = api.reqs.filter((r) => r.path.endsWith('/exception-report'));
     expect(reportCalls.every((r) => r.headers['X-Dev-Sub'] === 'agent-exception')).toBe(true);
   });
@@ -143,7 +143,7 @@ describe('runCycle', () => {
         : r.sku === 'STEEL-D10' ? base.plan(r, p, o, s) : null),
     });
     const res = await runCycle({ apiBase: API, runId: 'run-3', log: () => {} });
-    expect(res.summary).toBe('1 tự động, 0 bị chặn, 1 chờ quorum');
+    expect(res.summary).toBe('1 auto-executed, 0 blocked, 1 awaiting quorum');
   });
 
   it('planner passes the supplier note verbatim to the reasoner', async () => {

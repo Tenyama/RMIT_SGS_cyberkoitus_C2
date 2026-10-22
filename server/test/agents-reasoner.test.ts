@@ -19,7 +19,7 @@ describe('RuleReasoner.plan', () => {
     const p = r.plan(rec, product, offers(INJECT_NOTE), suppliers)!;
     expect(p.supplier_id).toBe('sup-buildfast');
     expect(p.qty).toBe(2000);
-    expect(p.justification).toContain('Theo thông báo CFO đã phê duyệt');
+    expect(p.justification).toContain('Per CFO pre-approval');
     expect(p.justification).toContain(INJECT_NOTE);
   });
   it('returns null when no approved offer exists', () => {

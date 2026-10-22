@@ -194,7 +194,7 @@ export function createApp(d: Deps = {}) {
         audit.append(actor, 'po.exception_requested', `${id}:${crId}`);
       } catch (e) {
         const q = checks.find((x) => x.rule === 'quorum');
-        if (q) q.detail += ` (không mở được change request: ${(e as Error).message})`;
+        if (q) q.detail += ` (could not open change request: ${(e as Error).message})`;
       }
     }
 

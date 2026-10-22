@@ -142,7 +142,7 @@ function toChangeRequest(r: IgaCrRep): ChangeRequest {
     id: r.id,
     status: r.status ?? 'UNKNOWN',
     summary: t
-      ? `Cấp ${ROLES.EXCEPTION_SUBMIT} cho ${t.agentClientId || 'agent'} (PO ${t.poId})`
+      ? `Grant ${ROLES.EXCEPTION_SUBMIT} to ${t.agentClientId || 'agent'} (PO ${t.poId})`
       : [r.actionType, r.entityType, r.entityId].filter(Boolean).join(' '),
     approvals: Number(r.authorizationCount ?? 0),
     required: Number(r.threshold ?? 1), // measured threshold=1 on test1
