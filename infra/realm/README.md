@@ -15,7 +15,7 @@ Tags: `[measured]` = probed on test1 2026-10-22; `[inferred]` = from docs/code, 
 | `staff1` | user | `proc.buyer` | runs agents, sees PO board |
 | `monitor1` | user | `proc.auditor` | audit chain |
 | `approver1`, `approver2`, `approver3` | users | `realm-management` → `tide-realm-admin` (after each links their Tide account) | sign change requests in TideCloak |
-| `tidewatch-sa` | confidential client, service account | `realm-management` → `view-realm`, `view-events`, `manage-users`, `manage-realm` | server → Admin/IGA API: **opens and reads** CRs, never approves |
+| `tidewatch-sa` | confidential client, service account | `realm-management` → `view-realm`, `view-events`, `manage-users`, `manage-realm, view-clients` | server → Admin/IGA API: **opens and reads** CRs, never approves |
 | `tidewatch-app` | public client | — | browser login for the web app |
 
 - `tide-realm-admin` can only be granted to a user linked to Tide: otherwise `400 target user is not linked to the Tide identity provider` `[measured]`.

@@ -1,6 +1,6 @@
 import type { MiddlewareHandler } from 'hono';
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
-import type { Permission } from '../../shared/types.ts';
+import { ROLES, type Permission } from '../../shared/types.ts';
 import { permissionsOf } from './policy.ts';
 
 export type AppEnv = { Variables: { sub: string; actor: string; roles: string[]; permissions: Permission[] } };
@@ -37,6 +37,8 @@ export function actorLabel(p: Claims): string {
   return pu ?? p.sub ?? 'unknown';
 }
 
+const HYBRID_HUMAN_ROLES: string[] = [ROLES.BUYER, ROLES.AUDITOR];
+
 /** AUTH_MODE=jwt (default) verifies the TideCloak token; AUTH_MODE=dev trusts X-Dev-Sub / X-Dev-Roles (D8). */
 export const authMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
   let sub: string | undefined;
@@ -50,6 +52,15 @@ export const authMiddleware: MiddlewareHandler<AppEnv> = async (c, next) => {
   } else {
     const h = c.req.header('authorization');
     const token = h?.startsWith('Bearer ') ? h.slice(7) : c.req.query('access_token');
+    // AUTH_MODE=hybrid: agents must present real TideCloak tokens; a human UI without Tide login may
+    // use dev headers, but only for the human roles below — never agent or exception roles.
+    const devSub = c.req.header('x-dev-sub') || c.req.query('dev_sub');
+    if (!token && process.env.AUTH_MODE === 'hybrid' && devSub) {
+      sub = devSub;
+      actor = devSub;
+      roles = (c.req.header('x-dev-roles') ?? c.req.query('dev_roles') ?? '').split(',').map((r) => r.trim())
+        .filter((r) => HYBRID_HUMAN_ROLES.includes(r));
+    }
     if (token) {
       try {
         const { payload } = await jwtVerify<Claims>(token, getJwks(), { algorithms: ['EdDSA', 'RS256'] });
