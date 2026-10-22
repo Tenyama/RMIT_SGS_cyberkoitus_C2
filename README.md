@@ -79,12 +79,23 @@ Open http://localhost:5137. Awaiting-quorum cards show **Simulate quorum approva
 
 ### B. Real Tide mode (agents with TideCloak tokens, real change requests)
 
-0. (Recommended) Restore the pre-licensed `test1` realm from the bundled backup (shipped in `procureguard-bundle-lite/`):
+0. (Recommended) Restore the pre-licensed `test1` realm from the bundled backup (shipped in `procureguard-bundle-lite/`). The script does the whole setup: it pulls the pinned TideCloak image, creates the container, copies in the saved realm database, starts it and waits until it is ready.
    ```bash
-   sudo bash procureguard-bundle-lite/restore.sh
-   # pulls tideorg/tidecloak-dev (pinned by digest) + loads the shipped H2 DB → realm test1, admin/admin
+   bash procureguard-bundle-lite/restore.sh   # prefix with sudo only if your user cannot run docker
+   ```
+   - The first run takes a few minutes while the image downloads. When it finishes it prints the console link: http://localhost:8080/admin/master/console/#/test1, login `admin` / `admin`.
+   - The script also says to copy `procureguard-bundle-lite/procureguard.env` to `.env`. You can skip that, because the repo already contains an identical `.env`.
+   - Re-running the script recreates the container from the saved database, which resets any changes you made in the console.
+
+   Handy commands:
+   ```bash
+   docker ps                               # confirm procureguard-tidecloak is up
+   docker logs -f procureguard-tidecloak   # startup logs
+   docker stop procureguard-tidecloak      # stop (it starts again later because of --restart unless-stopped)
    ```
    Or, from scratch: `docker compose up -d tidecloak` and follow [infra/realm/README.md](infra/realm/README.md).
+
+   > **Hosting online.** This is not a Vercel workload. TideCloak is a long-running Docker service with an H2 database; Vercel runs short-lived instances on a filesystem that is wiped, so the realm would be lost. To make it reachable online, run the same container on a Docker host with a persistent volume (a small VPS, Railway or Fly.io), expose port 8080 over HTTPS, change the default `admin`/`admin` login, and point the API at it with `REALM` and the right `API_BASE`. For the hackathon, running it locally next to the app is the supported path.
 
 1. Start TideCloak: `docker compose up -d tidecloak` (admin console http://localhost:8080, admin/admin), then create or license a Tide realm.
 2. Configure the realm by following [infra/realm/README.md](infra/realm/README.md):
