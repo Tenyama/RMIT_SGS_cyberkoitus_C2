@@ -181,7 +181,7 @@ export function createApp(d: Deps = {}) {
     // an approved PO that is re-evaluated without quorum stays approved (waiting for the right token)
     if (row.status === 'approved' && status === 'pending_approval') status = 'approved';
 
-    if (status === 'pending_approval' && !crId && process.env.AUTH_MODE === 'dev') {
+    if (status === 'pending_approval' && !crId && process.env.AUTH_MODE === 'dev' && process.env.SIM_QUORUM === '1') {
       // Offline demo: no TideCloak; /api/demo/approve/:id stands in for the quorum.
       crId = `sim-${id}`;
       audit.append(actor, 'po.exception_requested', `${id}:${crId}`);
