@@ -138,15 +138,20 @@ async function listRaw(status: string): Promise<IgaCrRep[]> {
 
 function toChangeRequest(r: IgaCrRep): ChangeRequest {
   const t = tracked.get(r.id);
+  const rawAction = [r.actionType, r.entityType, r.entityId].filter(Boolean).join(' ');
+  const action = r.actionType === 'GRANT_ROLES' ? 'Grant role' : r.actionType === 'REVOKE_ROLES' ? 'Revoke role' : (r.actionType ?? 'Realm change');
   return {
     id: r.id,
     status: r.status ?? 'UNKNOWN',
+    title: t ? `Exception request · ${t.poId}` : `${action} (${r.entityType ?? 'realm'})`,
     summary: t
-      ? `Grant ${ROLES.EXCEPTION_SUBMIT} to ${t.agentClientId || 'agent'} (PO ${t.poId})`
-      : [r.actionType, r.entityType, r.entityId].filter(Boolean).join(' '),
+      ? `Allow ${t.agentClientId || 'the planner agent'} to submit purchase order ${t.poId} once, even though it exceeds the per-order limit. ` +
+        `Grants ${ROLES.EXCEPTION_SUBMIT} temporarily; the server honours it for this one order only.`
+      : rawAction,
     approvals: Number(r.authorizationCount ?? 0),
     required: Number(r.threshold ?? 1), // measured threshold=1 on test1
     updated_at: Number(r.resolvedAt ?? r.createdAt ?? Date.now()), // epoch ms (measured)
+    po_id: t?.poId ?? null,
   };
 }
 

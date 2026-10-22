@@ -34,6 +34,11 @@ What to watch, on the Dashboard tab:
 4. An approver approves it in TideCloak, the planner re-submits with a fresh token, and the order executes once.
 5. **Audit** tab: every step is in the log, and the banner shows "Hash chain valid ✓".
 
+Hands-on for judges:
+- **Scenarios** (preset buttons above the board): each resets the warehouse, then changes the inputs — *Routine day*, *Stockout crisis* (the 6th restock crosses the 30M daily cap → quorum), *Big-ticket order* (a ~43M routine order → quorum), *Price spike* (approved cement +28% → blocked), *Prompt injection*.
+- **Editable inventory**: click **Edit** on any inventory row to change on-hand stock, daily demand or safety stock — the deterministic reorder math and the agents' next run follow the new inputs. Edits are permission-checked (`inventory:edit`, buyers only) and hash-chained in the audit log.
+- **Approvals** tab: change requests are shown with friendly names (linked order, amount, what approval unlocks) instead of raw ids.
+
 | Real | Simulated |
 |---|---|
 | TideCloak identities and Tide-signed tokens for the agents, role checks on every call, IGA change requests, approval in TideCloak | Supplier execution (no real ERP or payments); the agents' reasoning is rule-based (the LLM interface is pluggable, no API key was used); the human UI can run without Tide login (`AUTH_MODE=hybrid`) |
@@ -42,14 +47,25 @@ What to watch, on the Dashboard tab:
 
 ## Setup
 
-Requirements: Docker, Node.js 18+, a TideCloak realm (we used `test1`, Tide-licensed, with IGA on).
+Requirements: Docker, **Node.js 22** (Node 26's V8 breaks `better-sqlite3` — see note below), a TideCloak realm (we used `test1`, Tide-licensed, with IGA on).
+
+> **Node version note.** `better-sqlite3` is a native module. On Node 26 it fails to compile (removed V8 APIs). Use Node 22 LTS, e.g. a user-space install at `~/.local/share/node22` (no sudo):
+> ```bash
+> mkdir -p ~/.local/share/node22 /tmp/opencode && cd /tmp/opencode
+> curl -fsSLO https://nodejs.org/dist/latest-v22.x/node-v22.23.4-linux-x64.tar.xz
+> tar -xJf node-v22.23.4-linux-x64.tar.xz -C ~/.local/share/node22 --strip-components=1
+> export PATH="$HOME/.local/share/node22/bin:$PATH"
+> ```
 
 ```bash
 git clone https://github.com/Tenyama/RMIT_SGS_cyberkoitus_C2.git && cd RMIT_SGS_cyberkoitus_C2
 git checkout procure            # skip if this is already on main
 npm run install:all
-npm test                        # server tests
-npm --prefix web test           # web tests
+# npm 12 blocks install scripts by default — approve the native ones, then reinstall
+cd server && npm install-scripts approve better-sqlite3 esbuild && cd ../web && npm install-scripts approve @tidecloak/js esbuild && cd ..
+npm run install:all
+npm test                        # server tests (78)
+npm --prefix web test           # web tests (20)
 ```
 
 ### A. Offline demo (no TideCloak needed), about 2 minutes
@@ -64,11 +80,12 @@ Open http://localhost:5137. Awaiting-quorum cards show **Simulate quorum approva
 
 ### B. Real Tide mode (agents with TideCloak tokens, real change requests)
 
-**Fast path (team members):** `demo-bundle/procureguard-demo.tar.gz.enc` is an AES-256 encrypted snapshot of our configured TideCloak realm plus the app's `.env`. Ask the team for the passphrase (never committed), then run:
-```bash
-scripts/restore-demo.sh      # decrypts, starts TideCloak on :8080 with realm test1, writes .env, installs deps
-```
-Without the passphrase, set up your own realm as below.
+0. (Recommended) Restore the pre-licensed `test1` realm from the bundle instead of creating one:
+   ```bash
+   sudo bash ~/codean/procureguard/procureguard-bundle-lite/restore.sh
+   # loads tideorg/tidecloak-dev (pinned) + the shipped H2 DB → realm test1, admin/admin
+   ```
+   Or, from scratch: `docker compose up -d tidecloak` and follow [infra/realm/README.md](infra/realm/README.md).
 
 1. Start TideCloak: `docker compose up -d tidecloak` (admin console http://localhost:8080, admin/admin), then create or license a Tide realm.
 2. Configure the realm by following [infra/realm/README.md](infra/realm/README.md):
@@ -83,8 +100,9 @@ Without the passphrase, set up your own realm as below.
    AGENT_PLANNER_SECRET=...
    AGENT_EXCEPTION_SECRET=...
    ```
-4. Run:
+4. Run (Node 22 on PATH):
    ```bash
+   export PATH="$HOME/.local/share/node22/bin:$PATH"
    set -a; . ./.env; set +a
    cd server && AUTH_MODE=hybrid REALM=test1 API_BASE=http://localhost:4000 DB_PATH=./data/real.db npx tsx src/index.ts
    # other terminal
@@ -93,5 +111,12 @@ Without the passphrase, set up your own realm as below.
    - `hybrid` means agents must present real TideCloak tokens, while the human UI may use dev headers, limited to `proc.buyer` and `proc.auditor`.
    - Use `AUTH_MODE=jwt` for full Tide login, which needs `web/public/tidecloak.json` downloaded from the `tidewatch-app` client.
 5. Click **Hijacked agent** in the UI, then approve the new `GRANT_ROLES` request in TideCloak under **Change requests**. Within about 3 seconds the order moves to Auto-executed.
+
+> **Troubleshooting — `agent-*: HTTP 502 ... The Tide signing network could not complete the request.`**
+> The Tide enclave signing service is transiently unreachable. Run in offline dev mode instead (no Tide tokens needed):
+> ```bash
+> cd server && AUTH_MODE=dev SIM_QUORUM=1 API_BASE=http://localhost:4000 DB_PATH=./data/real.db npx tsx src/index.ts
+> ```
+> Agents authenticate via dev headers and the **Simulate quorum approval (dev)** button stands in for the Tide quorum.
 
 Docs: [design](docs/DESIGN.md) · [contracts](docs/CONTRACTS.md) · [demo script](docs/DEMO.md)

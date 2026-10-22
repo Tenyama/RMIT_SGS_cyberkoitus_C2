@@ -3,14 +3,15 @@ import { randomBytes } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import {
   ROLES,
-  type AgentName, type ExceptionReport, type PolicyCheck, type PoStatus, type Product, type PurchaseOrder,
+  type AgentName, type DemoPresetName, type ExceptionReport, type InventoryPatchReq, type PolicyCheck,
+  type PoStatus, type Product, type PurchaseOrder,
   type Recommendation, type StreamEvent, type Supplier, type SupplierOffer,
 } from '../../shared/types.ts';
 import { getDb, now, openDb, setDb, type Db } from './db.ts';
 import { authMiddleware, requirePermission, type AppEnv } from './auth.ts';
 import { evaluateSubmit } from './policy.ts';
 import { bestLeadTime, recommend } from './replenish.ts';
-import { injectMaliciousNote, resetDemo, seed } from './seed.ts';
+import { applyPreset, injectMaliciousNote, resetDemo, seed } from './seed.ts';
 import * as audit from './audit.ts';
 import { publish, streamHandler } from './sse.ts';
 
@@ -125,6 +126,40 @@ export function createApp(d: Deps = {}) {
     const sup = suppliers();
     const offs = offers();
     return c.json({ products: ps, recommendations: ps.map((p) => recommendationFor(p, sup, offs)) });
+  });
+
+  // Edit the inputs of the reorder math (on_hand / demand / safety stock). The policy engine is untouched.
+  app.patch('/api/inventory/:sku', requirePermission('inventory:edit'), async (c) => {
+    const sku = c.req.param('sku');
+    const p = product(sku);
+    if (!p) return c.json({ error: `unknown sku ${sku}`, code: 'NOT_FOUND' }, 404);
+    const b = (await c.req.json().catch(() => null)) as InventoryPatchReq | null;
+    if (!b || typeof b !== 'object') return c.json({ error: 'JSON body required', code: 'BAD_REQUEST' }, 400);
+
+    const intField = (v: unknown) => Number.isInteger(v) && (v as number) >= 0;
+    const numField = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v >= 0;
+    const next = { on_hand: p.on_hand, avg_daily_demand: p.avg_daily_demand, safety_stock: p.safety_stock };
+    const changed: string[] = [];
+    if (b.on_hand !== undefined) {
+      if (!intField(b.on_hand)) return c.json({ error: 'on_hand must be an integer >= 0', code: 'BAD_REQUEST' }, 400);
+      next.on_hand = b.on_hand!; changed.push(`on_hand ${p.on_hand}→${b.on_hand}`);
+    }
+    if (b.avg_daily_demand !== undefined) {
+      if (!numField(b.avg_daily_demand)) return c.json({ error: 'avg_daily_demand must be a number >= 0', code: 'BAD_REQUEST' }, 400);
+      next.avg_daily_demand = b.avg_daily_demand!; changed.push(`avg_daily_demand ${p.avg_daily_demand}→${b.avg_daily_demand}`);
+    }
+    if (b.safety_stock !== undefined) {
+      if (!intField(b.safety_stock)) return c.json({ error: 'safety_stock must be an integer >= 0', code: 'BAD_REQUEST' }, 400);
+      next.safety_stock = b.safety_stock!; changed.push(`safety_stock ${p.safety_stock}→${b.safety_stock}`);
+    }
+    if (!changed.length) return c.json({ error: 'nothing to update (on_hand, avg_daily_demand, safety_stock)', code: 'BAD_REQUEST' }, 400);
+
+    getDb().prepare('UPDATE product SET on_hand = ?, avg_daily_demand = ?, safety_stock = ? WHERE sku = ?')
+      .run(next.on_hand, next.avg_daily_demand, next.safety_stock, sku);
+    audit.append(c.get('actor'), 'inventory.update', `${sku}: ${changed.join(', ')}`);
+    publishInventory();
+    const updated = product(sku)!;
+    return c.json({ product: updated, recommendation: recommendationFor(updated) });
   });
 
   app.get('/api/suppliers', requirePermission('supplier:read'), (c) => {
@@ -280,6 +315,20 @@ export function createApp(d: Deps = {}) {
     return c.json({ ok: true });
   });
 
+  // Named scenarios for judges: reset + deterministic data tweak; the story changes, the rules don't.
+  app.post('/api/demo/preset', requirePermission('demo:inject'), async (c) => {
+    const b = (await c.req.json().catch(() => null)) as { name?: string } | null;
+    const name = String(b?.name ?? '') as DemoPresetName;
+    try {
+      const { preset, injected } = applyPreset(name);
+      audit.append(c.get('actor'), 'demo.preset', name);
+      publishInventory();
+      return c.json({ ok: true as const, preset: name, description: preset.description, injected });
+    } catch (e) {
+      return c.json({ error: (e as Error).message, code: 'BAD_REQUEST' }, 400);
+    }
+  });
+
   app.get('/api/audit', requirePermission('audit:read'), (c) => {
     const v = audit.verify();
     return c.json({ items: audit.list(), valid: v.ok, broken_at: v.brokenAt });
@@ -293,6 +342,13 @@ export function createApp(d: Deps = {}) {
 /** Mount optional P3 routes (before 404 handling — Hono matches in registration order, routes are distinct). */
 export async function mountOptional(app: Hono<AppEnv>, opts: { governance: boolean }) {
   const iga = await deps.loadIga();
+  // Re-link change requests recorded in the DB so governance + friendly CR naming survive a restart.
+  if (typeof iga?.trackChangeRequest === 'function') {
+    const rows = getDb()
+      .prepare("SELECT id, change_request_id FROM purchase_order WHERE change_request_id IS NOT NULL AND status IN ('pending_approval','approved')")
+      .all() as { id: string; change_request_id: string }[];
+    for (const r of rows) iga.trackChangeRequest(r.change_request_id, r.id, 'agent-planner');
+  }
   if (typeof iga?.registerIgaRoutes === 'function') iga.registerIgaRoutes(app);
   if (!opts.governance) return;
   const gov = await optionalImport(GOV_SPEC);

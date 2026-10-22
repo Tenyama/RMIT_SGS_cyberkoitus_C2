@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  computeKpis, formatVND, groupLogsByRun, groupPosByStatus, isSimulatedCr, mergeById, upsertById,
+  computeKpis, formatVND, groupLogsByRun, groupPosByStatus, isSimulatedCr, mergeById, shortCrId, upsertById,
 } from "./format.js";
 
 describe("formatVND", () => {
@@ -97,5 +97,15 @@ describe("isSimulatedCr", () => {
     expect(isSimulatedCr("sim-po_1")).toBe(true);
     expect(isSimulatedCr("8a1f")).toBe(false);
     expect(isSimulatedCr(null)).toBe(false);
+  });
+});
+
+describe("shortCrId", () => {
+  it("labels simulated requests, truncates uuids, keeps short ids", () => {
+    expect(shortCrId("sim-PO-ab12")).toBe("simulated request");
+    expect(shortCrId("f47ac10b-58cc-4372-a567-0e02b2c3d479")).toBe("f47ac10b…");
+    expect(shortCrId("cr-42")).toBe("cr-42");
+    expect(shortCrId(null)).toBe("");
+    expect(shortCrId(undefined)).toBe("");
   });
 });

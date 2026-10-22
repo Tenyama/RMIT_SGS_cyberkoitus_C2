@@ -3,10 +3,11 @@
 // ProcureGuard never authorizes, denies or commits a change request.
 import { useCallback, useEffect, useState } from "react";
 import { useTideCloak } from "@tidecloak/react";
-import { STATUS_LINE, formatTime, formatVND, formatNum } from "../lib/format.js";
+import { STATUS_LINE, formatTime, formatVND, formatNum, shortCrId } from "../lib/format.js";
 
 const POLL_MS = 5000;
 const REC = { approve: "Recommend approve", reject: "Recommend reject", investigate: "Investigate" };
+const STATUS_CHIP = { PENDING: "warn", APPROVED: "ok", COMMITTED: "ok", DENIED: "err", REJECTED: "err" };
 
 function consoleUrl(config) {
   const base = String(config?.["auth-server-url"] ?? "http://localhost:8080").replace(/\/$/, "");
@@ -110,30 +111,46 @@ export default function Approver() {
   try { cfg = getConfig(); } catch { /* config not loaded yet */ }
   const url = consoleUrl(cfg);
   const poFor = (cr) => pos.find((p) => p.change_request_id === cr.id || (cr.po_id && p.id === cr.po_id));
+  const titleFor = (cr, po) =>
+    po ? `Over-limit order · ${formatVND(po.total)} · ${po.sku}` : (cr.title || cr.summary || "Realm change");
 
   return (
     <section>
       <div className="row between audit-top">
-        <h2>Approval requests (IGA)</h2>
+        <h2>Requests needing approval</h2>
         <a className="btn primary" href={url} target="_blank" rel="noopener noreferrer">Approve in TideCloak</a>
       </div>
-      <p className="muted small">Open Change requests in the TideCloak console and sign with your Tide key. ProcureGuard never approves anything itself.</p>
+      <p className="muted small">
+        Each request lets the planner agent submit one specific over-limit order, once. Open <b>Change requests</b> in the
+        TideCloak console and sign with your Tide key — ProcureGuard never approves anything itself.
+      </p>
       {loadError && <div className="alert err">Could not load: {loadError}</div>}
-      {items.length === 0 && !loadError && <div className="empty">No pending requests.</div>}
+      {items.length === 0 && !loadError && (
+        <div className="empty">No pending requests — when an order exceeds the agent's authority, it shows up here.</div>
+      )}
       <div className="approver-grid">
-        {items.map((cr) => (
-          <article key={cr.id} className="po s-pending_approval">
-            <div className="cta">
-              <div className="cta-info">
-                <span className="muted small">Change request</span> <code>{cr.id}</code>
+        {items.map((cr) => {
+          const po = poFor(cr);
+          return (
+            <article key={cr.id} className="po s-pending_approval">
+              <div className="po-head">
+                <span className="po-name">{titleFor(cr, po)}</span>
+                <span className={`chip ${STATUS_CHIP[cr.status] ?? "ok"}`}>{cr.status}</span>
+              </div>
+              <div className="row muted small">
+                <span title={cr.id}>Request <code>{shortCrId(cr.id)}</code></span>
+                <span>·</span>
+                <span>{formatTime(cr.updated_at)}</span>
                 <span className="cta-q">{cr.approvals}/{cr.required} approvals</span>
               </div>
-              <span className="muted small">{cr.status} · {formatTime(cr.updated_at)}</span>
-            </div>
-            {cr.summary && <div className="po-name">{cr.summary}</div>}
-            <PoDetails po={poFor(cr)} />
-          </article>
-        ))}
+              {cr.summary && <div className="muted small">{cr.summary}</div>}
+              <PoDetails po={po} />
+              <div className="muted small">
+                Approving grants <b>agent-planner</b> a one-time exception for this order only — the server then re-submits it exactly once.
+              </div>
+            </article>
+          );
+        })}
       </div>
     </section>
   );

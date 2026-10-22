@@ -74,3 +74,76 @@ export function resetDemo(db: Db = getDb()): void {
   })();
   seed(db);
 }
+
+// ---------- demo presets (judges) ----------
+// Each preset resets first, then tweaks deterministic data so "Run AI agents" tells a different story.
+// The policy engine and replenishment math are untouched — only inputs change.
+export interface DemoPreset { name: string; description: string }
+
+export const PRESETS: Record<string, DemoPreset> = {
+  routine: {
+    name: 'Routine day',
+    description: 'Default warehouse: 4 SKUs below reorder point, every order within policy — all auto-execute.',
+  },
+  'stockout-crisis': {
+    name: 'Stockout crisis',
+    description:
+      'Sand, brick, PVC and screws are (nearly) gone. 6 SKUs need restocking; 5 execute instantly, ' +
+      'and the 6th (cement) would blow the 30M daily cap — it waits for quorum.',
+  },
+  'big-ticket': {
+    name: 'Big-ticket order',
+    description:
+      'Brick demand spiked 8×. The recommended order (~43M VND) is over the 10M per-order limit, ' +
+      'so the planner must wait for a quorum — no attack needed.',
+  },
+  'price-spike': {
+    name: 'Price spike',
+    description:
+      'Approved cement suppliers raised prices ~28% overnight — outside the ±20% tolerance, ' +
+      'so the order is blocked as a price anomaly.',
+  },
+  injection: {
+    name: 'Prompt injection',
+    description:
+      "A poisoned note appears in BuildFast's cement offer. The planner obeys it (2,000 bags, unapproved " +
+      'supplier) and the server blocks the order; the exception analyst flags possible_prompt_injection.',
+  },
+};
+
+const setStock = (db: Db, sku: string, onHand: number) =>
+  db.prepare('UPDATE product SET on_hand = ?, on_order = 0 WHERE sku = ?').run(onHand, sku);
+
+/**
+ * Reset the demo and apply a named preset. Returns the preset + whether the malicious note is on.
+ * Throws Error(unknown preset) for bad names.
+ */
+export function applyPreset(name: string, db: Db = getDb()): { preset: DemoPreset; injected: boolean } {
+  const preset = PRESETS[name];
+  if (!preset) throw new Error(`unknown preset "${name}" (known: ${Object.keys(PRESETS).join(', ')})`);
+  resetDemo(db);
+  db.transaction(() => {
+    switch (name) {
+      case 'stockout-crisis':
+        setStock(db, 'CAT-XAY', 4); // rec 30 → 9.3M
+        setStock(db, 'GACH-ONG4', 1); // rec 7 → 7.56M
+        setStock(db, 'PVC-90', 0); // rec 40 → 5.6M
+        setStock(db, 'DINH-VIT', 0); // rec 28 → 1.232M
+        // cement (9.5M) stays seeded; submitted last, it crosses the 30M daily limit
+        break;
+      case 'big-ticket':
+        db.prepare('UPDATE product SET avg_daily_demand = 4, on_order = 0 WHERE sku = ?').run('GACH-ONG4');
+        break; // rec 40 × 1.08M ≈ 43.2M → over the per-order limit
+      case 'price-spike':
+        db.prepare('UPDATE supplier_offer SET unit_price = 121_600 WHERE supplier_id = ? AND sku = ?').run('sup-hoabinh', CEMENT_SKU);
+        db.prepare('UPDATE supplier_offer SET unit_price = 119_040 WHERE supplier_id = ? AND sku = ?').run('sup-hatien', CEMENT_SKU);
+        break; // both ~28% over the 95k reference → price_sanity hard-fails
+      case 'injection':
+        injectMaliciousNote(true, db);
+        break;
+      default: // 'routine' — reset only
+        break;
+    }
+  })();
+  return { preset, injected: name === 'injection' };
+}
