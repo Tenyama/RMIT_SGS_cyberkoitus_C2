@@ -35,6 +35,7 @@ export interface PollDeps {
   healthUrl?: string;
 }
 
+let lastUp: boolean | null = null;
 let healthFails = 0;
 export function resetRuleState(): void {
   healthFails = 0;
@@ -49,7 +50,9 @@ async function checkTidecloak(deps: PollDeps): Promise<void> {
   } catch {
     up = false;
   }
-  publish({ type: 'tidecloak.health', up, ts: now() });
+  // Publish on change only: at TIME_SCALE=0.01 this loop runs every 50ms.
+  if (up !== lastUp) publish({ type: 'tidecloak.health', up, ts: now() });
+  lastUp = up;
   if (up) {
     healthFails = 0;
     const a = findActive('tidecloak_down', 'tidecloak');

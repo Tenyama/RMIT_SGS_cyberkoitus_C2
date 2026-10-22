@@ -5,6 +5,8 @@ import { serve } from '@hono/node-server';
 import {
   ROLES,
   RULES,
+  type AlertKind,
+  type AlertSeverity,
   type AlertsRes,
   type ChangeRequest,
   type DecryptBeaconReq,
@@ -21,7 +23,7 @@ import { openDb, setDb, setClock, now, getDb, type Db } from './db.ts';
 import { authMiddleware, requireRole, type AppEnv } from './auth.ts';
 import { lookupSub } from './hmac.ts';
 import { append } from './audit.ts';
-import { AlertTransitionError, getAlert, listAlerts, transition } from './alerts.ts';
+import { AlertTransitionError, getAlert, listAlerts, openAlert, transition } from './alerts.ts';
 import { onBeacon, scaled, startRules } from './rules.ts';
 import { publish, streamHandler } from './sse.ts';
 
@@ -34,7 +36,8 @@ export interface IgaModule {
 /** Track D seam (server/src/simulator.ts). */
 export interface SimModule {
   registerSimRoutes?: (app: Hono<any>) => void;
-  tick?: (now: number) => StreamEvent[];
+  initSimulator?: (db: Db, opts: { publish: (ev: StreamEvent) => void; openAlert: (a: { kind: AlertKind; severity: AlertSeverity; subject: string; detail: string }) => void }) => void;
+  startSimulator?: () => () => void;
 }
 export interface AppDeps {
   db?: Db;
@@ -177,11 +180,14 @@ async function main() {
   const sim = process.env.SIMULATOR === 'on' ? await optional<SimModule>('./simulator.ts') : undefined;
   const app = createApp({ iga, sim });
   startRules({ iga });
-  if (sim?.tick) {
-    setInterval(() => {
-      for (const ev of sim.tick!(Date.now())) publish(ev);
-    }, scaled(RULES.POLL_MS));
-  }
+  // The simulator publishes its own events inside tick(); don't re-publish here.
+  sim?.initSimulator?.(getDb(), { publish, openAlert: (a) => openAlert(a.kind, a.severity, a.subject, a.detail) });
+  sim?.startSimulator?.();
+  const metrics = await optional<{ registerExtraMetrics?: (fn: () => string[]) => void }>('./metrics.ts');
+  metrics?.registerExtraMetrics?.(() => {
+    const rows = getDb().prepare('SELECT tag, ok, SUM(count) AS n FROM decrypt_event GROUP BY tag, ok').all() as { tag: string; ok: number; n: number }[];
+    return ['# TYPE tidewatch_decrypt_total counter', ...rows.map((r) => `tidewatch_decrypt_total{tag="${r.tag}",ok="${r.ok ? 'true' : 'false'}"} ${r.n}`)];
+  });
   const port = Number(process.env.PORT) || 4000;
   serve({ fetch: app.fetch, port }, () => console.log(`tidewatch server :${port} auth=${process.env.AUTH_MODE ?? 'jwt'} sim=${!!sim} iga=${!!iga}`));
 }
