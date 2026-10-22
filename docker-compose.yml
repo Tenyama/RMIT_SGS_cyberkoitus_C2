@@ -1,0 +1,18 @@
+services:
+  lgtm:
+    image: grafana/otel-lgtm:0.37.0
+    ports: ["3001:3000", "4317:4317", "4318:4318"]
+    environment:
+      ENABLE_LOGS_GRAFANA: "true"
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
+    volumes:
+      - ./infra/prometheus.yaml:/otel-lgtm/prometheus.yaml:ro
+  tidecloak:
+    image: tideorg/tidecloak-dev:latest
+    depends_on: [lgtm]
+    ports: ["8080:8080", "9000:9000"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"

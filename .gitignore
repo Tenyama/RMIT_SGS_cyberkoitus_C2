@@ -1,0 +1,7 @@
+node_modules/
+dist/
+web/public/tidecloak.json
+server/data/
+*.db
+.env
+.remember/
