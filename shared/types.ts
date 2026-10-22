@@ -1,88 +1,143 @@
-// Tide Watch — shared contracts (source of truth for server + web).
+// ProcureGuard — shared contracts (source of truth for server + web).
 // Change only via the orchestrator; tracks must not edit this file.
-// Spec: docs/DESIGN.md §7–8; overrides: docs/CONTRACTS.md.
+// Spec: docs/DESIGN.md; overrides + ownership: docs/CONTRACTS.md.
 
-// ---------- Constants ----------
-export const SWARM_SIZE = 20;
-export const THRESHOLD = 14;
-export const MAX_FAULTY = SWARM_SIZE - THRESHOLD; // 6
-
-// Multiply every duration by TIME_SCALE (env, default 1; demo 0.01).
-export const RULES = {
-  DECRYPT_WINDOW_MS: 10 * 60_000,
-  DECRYPT_THRESHOLD: 50, // records decrypted by one actor in the window
-  MARGIN_WARN: 3,
-  MARGIN_CRIT: 1,
-  BUDGET_CRIT: 2,
-  TIDECLOAK_DOWN_SAMPLES: 3,
-  QUORUM_STALE_MS: 15 * 60_000,
-  CONSECUTIVE_SAMPLES: 3, // NFR6: state changes only after N consecutive samples
-  SLOW_P95_MS: 2_000,
-  SLOW_RECOVER_P95_MS: 1_000,
-  DOWN_TO_LOST_MS: 30 * 60_000,
-  STALE_RECOVER_OK: 10,
-  HEARTBEAT_MS: 15_000,
-  POLL_MS: 5_000,
-} as const;
-
-// Roles (realm roles unless noted). Server checks these on the JWT.
+// ---------- Identities & roles (TideCloak realm `test1`) ----------
+// Realm roles unless noted. The server re-checks these on EVERY consequential call.
 export const ROLES = {
-  CUSTOMER: '_tide_kyc.selfencrypt',
-  STAFF: '_tide_kyc.selfdecrypt',
-  MONITOR: 'tw-monitor',
-  PLATFORM: 'tw-platform',
-  APPROVER: 'tide-realm-admin', // client role on realm-management
+  AGENT_ANALYST: 'agent.analyst',
+  AGENT_PLANNER: 'agent.planner',
+  AGENT_EXCEPTION: 'agent.exception',
+  EXCEPTION_SUBMIT: 'proc.exception-submit', // temporary, granted ONLY via IGA quorum
+  BUYER: 'proc.buyer',
+  AUDITOR: 'proc.auditor',
+  APPROVER: 'tide-realm-admin', // client role on realm-management; approves in TideCloak, never in our app
 } as const;
 export type Role = (typeof ROLES)[keyof typeof ROLES];
 
+// TideCloak client ids of the three agents (service accounts, client_credentials).
+export const AGENT_CLIENTS = {
+  analyst: 'agent-analyst',
+  planner: 'agent-planner',
+  exception: 'agent-exception',
+} as const;
+export type AgentName = keyof typeof AGENT_CLIENTS;
+
+export type Permission =
+  | 'inventory:read'
+  | 'supplier:read'
+  | 'po:read'
+  | 'po:draft'
+  | 'po:submit'
+  | 'exception:report'
+  | 'agents:run'
+  | 'audit:read'
+  | 'demo:inject';
+
+// Role -> permissions. The ONLY place authority is defined; the LLM never decides it.
+export const PERMISSIONS: Record<string, Permission[]> = {
+  [ROLES.AGENT_ANALYST]: ['inventory:read', 'supplier:read'],
+  [ROLES.AGENT_PLANNER]: ['inventory:read', 'supplier:read', 'po:draft', 'po:submit'],
+  [ROLES.AGENT_EXCEPTION]: ['inventory:read', 'supplier:read', 'po:read', 'exception:report'],
+  [ROLES.BUYER]: ['inventory:read', 'supplier:read', 'po:read', 'agents:run', 'demo:inject'],
+  [ROLES.AUDITOR]: ['po:read', 'audit:read', 'inventory:read'],
+};
+
+// ---------- Business policy (deterministic, enforced in server/src/policy.ts) ----------
+export const POLICY = {
+  CURRENCY: 'VND',
+  AGENT_PO_LIMIT: 10_000_000, // per order an agent may execute alone
+  AGENT_DAILY_LIMIT: 30_000_000, // sum of agent-executed orders per day
+  PRICE_TOLERANCE: 0.2, // unit price may deviate ±20% from reference_price
+  MAX_QTY_FACTOR: 3, // qty may not exceed 3× the deterministic recommendation
+  REVIEW_DAYS: 7, // order-up-to horizon beyond lead time
+} as const;
+
 // ---------- Domain ----------
-export type NodeState = 'healthy' | 'slow' | 'down' | 'stale' | 'lost';
-
-export interface NodeRow {
-  key_id: string;
-  node_id: string; // "ork-01".."ork-20"
-  state: NodeState;
-  since: number; // epoch ms
-  p95_ms: number | null;
-  last_error: string | null; // e.g. TIDE-ORK-SIG-VERIFY_FAILED
+export interface Product {
+  sku: string;
+  name: string; // e.g. "Xi măng PCB40 (bao 50kg)"
+  unit: string; // "bao", "cây", "m3"...
+  on_hand: number;
+  on_order: number; // qty in executed-but-not-received POs
+  avg_daily_demand: number;
+  safety_stock: number;
+  reference_price: number; // VND per unit, used for price sanity checks
 }
 
-export interface KeyHealth {
-  key_id: string;
-  margin: number; // (healthy + slow) - THRESHOLD; < 0 => DoS
-  budget: number; // MAX_FAULTY - (lost + stale); < 0 => key at risk of permanent loss
-  dos: boolean; // margin < 0
-}
-
-export type AlertKind = 'decrypt_anomaly' | 'key_margin' | 'shard_loss' | 'tidecloak_down' | 'quorum_stale';
-export type AlertSeverity = 'info' | 'warn' | 'crit';
-export type AlertStatus = 'open' | 'proposed' | 'pending_quorum' | 'resolved' | 'denied' | 'dismissed';
-
-export interface Alert {
+export interface Supplier {
   id: string;
-  kind: AlertKind;
-  severity: AlertSeverity;
-  subject: string; // actor_hash | key_id
-  status: AlertStatus;
+  name: string;
+  approved: boolean; // only approved suppliers can ever be executed against
+}
+
+export interface SupplierOffer {
+  supplier_id: string;
+  sku: string;
+  unit_price: number;
+  moq: number;
+  lead_time_days: number;
+  note: string; // free text from the supplier — UNTRUSTED (prompt-injection vector in the demo)
+}
+
+// Deterministic output of server/src/replenish.ts — the LLM only explains it.
+export interface Recommendation {
+  sku: string;
+  reorder_point: number; // avg_daily_demand × lead_time + safety_stock
+  projected: number; // on_hand + on_order
+  recommended_qty: number; // 0 when projected > reorder_point
+  status: 'stockout_risk' | 'ok' | 'overstock';
+}
+
+export type PoStatus =
+  | 'draft'
+  | 'executed' // passed policy (or quorum) and sent to the simulated supplier
+  | 'blocked' // hard violation, cannot be approved (e.g. unapproved supplier)
+  | 'pending_approval' // over agent authority -> IGA change request open
+  | 'approved' // quorum committed; waiting for the planner to re-submit
+  | 'rejected'; // approvers denied
+
+export interface PolicyCheck {
+  rule: 'role' | 'supplier_approved' | 'po_limit' | 'daily_limit' | 'price_sanity' | 'qty_sanity' | 'quorum';
+  ok: boolean;
+  detail: string;
+}
+
+export interface PurchaseOrder {
+  id: string;
+  sku: string;
+  supplier_id: string;
+  qty: number;
+  unit_price: number;
+  total: number;
+  status: PoStatus;
+  created_by: string; // actor label, e.g. "agent-planner" — never a human's raw sub
+  justification: string; // LLM text, shown but never trusted
+  checks: PolicyCheck[]; // last policy evaluation
   change_request_id: string | null;
-  detail: string | null; // human text, never plaintext data or raw sub
-  opened_at: number;
+  exception_report: ExceptionReport | null;
+  created_at: number;
   updated_at: number;
 }
 
-// Allowed alert transitions (DESIGN §7.3). Anything else => 409.
-export const ALERT_TRANSITIONS: Record<AlertStatus, AlertStatus[]> = {
-  open: ['proposed', 'dismissed', 'resolved'],
-  proposed: ['pending_quorum', 'open'], // back to open if IGA call fails
-  pending_quorum: ['resolved', 'denied'],
-  resolved: [],
-  denied: [],
-  dismissed: [],
-};
+export interface ExceptionReport {
+  summary: string;
+  risk_flags: string[]; // e.g. ["unapproved_supplier", "possible_prompt_injection"]
+  recommendation: 'approve' | 'reject' | 'investigate';
+}
+
+export interface AuditEntry {
+  seq: number;
+  actor: string;
+  action: string;
+  target: string | null;
+  ts: number;
+  hash: string;
+}
 
 export interface ChangeRequest {
   id: string;
-  status: string; // raw IGA status, e.g. PENDING | APPROVED | COMMITTED | DENIED
+  status: string; // raw IGA status: PENDING | APPROVED | DENIED | COMMITTED
   summary: string;
   approvals: number;
   required: number;
@@ -91,58 +146,42 @@ export interface ChangeRequest {
 
 // ---------- SSE /api/stream ----------
 export type StreamEvent =
-  | { type: 'node.state'; key_id: string; node_id: string; from: NodeState; to: NodeState; ts: number }
-  | { type: 'key.margin'; key_id: string; margin: number; budget: number; dos: boolean; ts: number }
-  | { type: 'alert.opened'; alert: Alert }
-  | { type: 'alert.updated'; alert: Alert }
-  | { type: 'cr.updated'; id: string; status: string; approvals: number; required: number }
-  | { type: 'decrypt.rate'; actor_hash: string; count_10m: number }
-  | { type: 'tidecloak.health'; up: boolean; ts: number }
+  | { type: 'inventory.updated'; products: Product[] }
+  | { type: 'po.updated'; po: PurchaseOrder }
+  | { type: 'agent.log'; agent: AgentName; step: string; message: string; ts: number }
+  | { type: 'cr.updated'; id: string; status: string; approvals: number; required: number; po_id: string | null }
   | { type: 'heartbeat'; ts: number };
 
-// ---------- REST /api/* (DESIGN §8.1) ----------
-export interface ApiError { error: string; code?: string } // code e.g. QUORUM_NOT_MET
+// ---------- REST /api/* ----------
+export interface ApiError { error: string; code?: string }
 
-// POST /api/kyc  (CUSTOMER) -> 201
-export interface KycCreateReq { display_mask: string; payload_ct: string }
-export interface KycCreateRes { id: string }
+// GET /api/me
+export interface MeRes { actor: string; roles: string[]; permissions: Permission[] }
 
-// GET /api/kyc?limit=50&cursor=  (STAFF)
-export interface KycItem { id: string; display_mask: string; payload_ct: string; created_at: number }
-export interface KycListRes { items: KycItem[]; next_cursor: string | null }
+// GET /api/inventory            (inventory:read)
+export interface InventoryRes { products: Product[]; recommendations: Recommendation[] }
 
-// POST /api/telemetry/decrypt  (any logged-in user) -> 202
-// Actor is taken from the JWT, never from the body.
-export interface DecryptBeaconReq {
-  tag: string; // 'kyc'
-  ok: boolean;
-  latency_ms: number;
-  count: number; // records in this doDecrypt batch (>=1)
-  actor_detail_ct?: string; // optional, stretch §9.3
-}
+// GET /api/suppliers?sku=       (supplier:read)
+export interface SuppliersRes { suppliers: Supplier[]; offers: SupplierOffer[] }
 
-// GET /api/nodes?key_id=  (PLATFORM | MONITOR)
-export interface NodesRes { key_id: string; nodes: NodeRow[]; health: KeyHealth }
+// POST /api/po                  (po:draft) -> 201 PurchaseOrder (status draft)
+export interface PoDraftReq { sku: string; supplier_id: string; qty: number; justification: string }
 
-// GET /api/alerts?status=open  (MONITOR)
-export interface AlertsRes { items: Alert[] }
+// POST /api/po/:id/submit       (po:submit) -> 200 PurchaseOrder
+//   executed | blocked | pending_approval (server opened an IGA CR) | executed after approval
+// GET  /api/po?status=          (po:read) -> { items: PurchaseOrder[] }
+export interface PoListRes { items: PurchaseOrder[] }
 
-// POST /api/alerts/:id/propose-revoke  (MONITOR) -> 202
-export interface ProposeRevokeRes { change_request_id: string }
+// POST /api/po/:id/exception-report (exception:report) body ExceptionReport -> 200 PurchaseOrder
 
-// POST /api/alerts/:id/dismiss  (MONITOR) -> 200
-export interface DismissReq { reason: string }
+// POST /api/agents/run          (agents:run) -> 202 { run_id } ; progress via agent.log events
+export interface AgentsRunRes { run_id: string }
 
-// GET /api/change-requests?status=PENDING  (APPROVER) — read-only proxy of IGA
+// POST /api/demo/inject         (demo:inject) body { enabled: boolean } -> 200
+//   enabled=true writes a malicious note into the unapproved supplier's offer.
+
+// GET /api/audit                (audit:read) -> { items: AuditEntry[]; valid: boolean }
+export interface AuditRes { items: AuditEntry[]; valid: boolean }
+
+// GET /api/change-requests      (APPROVER role) -> read-only mirror of IGA
 export interface ChangeRequestsRes { items: ChangeRequest[] }
-
-// POST /api/chaos  (PLATFORM, only when SIMULATOR=on) -> 200
-export interface ChaosReq {
-  action: 'kill' | 'revive' | 'stale' | 'slow';
-  node_ids: string[];
-  key_id?: string; // default DEFAULT_KEY_ID
-}
-export const DEFAULT_KEY_ID = 'kyc-key';
-
-// GET /api/me  (any) — lets the web route by role without decoding JWT twice
-export interface MeRes { actor_hash: string; roles: Role[] }

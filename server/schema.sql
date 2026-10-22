@@ -1,63 +1,61 @@
--- Tide Watch SQLite schema (DESIGN §7.1 + overrides in docs/CONTRACTS.md).
--- Owner: orchestrator. Applied by server/src/db.ts on boot (idempotent).
+-- ProcureGuard SQLite schema. Owner: orchestrator. Applied by server/src/db.ts on boot (idempotent).
 PRAGMA journal_mode = WAL;
 
-CREATE TABLE IF NOT EXISTS kyc_record (
-  id            TEXT PRIMARY KEY,
-  owner_hash    TEXT NOT NULL,             -- HMAC(sub) of the customer
-  display_mask  TEXT NOT NULL,             -- non-sensitive, e.g. "Nguyen V. A · 09***123"
-  payload_ct    TEXT NOT NULL,             -- doEncrypt ciphertext, tag 'kyc'
-  created_at    INTEGER NOT NULL
+CREATE TABLE IF NOT EXISTS product (
+  sku               TEXT PRIMARY KEY,
+  name              TEXT NOT NULL,
+  unit              TEXT NOT NULL,
+  on_hand           INTEGER NOT NULL,
+  on_order          INTEGER NOT NULL DEFAULT 0,
+  avg_daily_demand  REAL NOT NULL,
+  safety_stock      INTEGER NOT NULL,
+  reference_price   INTEGER NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS decrypt_event (
-  id              INTEGER PRIMARY KEY,
-  actor_hash      TEXT NOT NULL,           -- HMAC(sub) from the JWT
-  actor_detail_ct TEXT,                    -- optional, stretch §9.3
-  tag             TEXT NOT NULL,
-  ok              INTEGER NOT NULL CHECK (ok IN (0,1)),
-  count           INTEGER NOT NULL DEFAULT 1 CHECK (count >= 1),
-  latency_ms      INTEGER NOT NULL,
-  ts              INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS ix_decrypt_actor_ts ON decrypt_event(actor_hash, ts);
-
-CREATE TABLE IF NOT EXISTS node_state (
-  key_id     TEXT NOT NULL,
-  node_id    TEXT NOT NULL,
-  state      TEXT NOT NULL CHECK (state IN ('healthy','slow','down','stale','lost')),
-  since      INTEGER NOT NULL,
-  p95_ms     INTEGER,
-  last_error TEXT,
-  PRIMARY KEY (key_id, node_id)
+CREATE TABLE IF NOT EXISTS supplier (
+  id        TEXT PRIMARY KEY,
+  name      TEXT NOT NULL,
+  approved  INTEGER NOT NULL CHECK (approved IN (0,1))
 );
 
-CREATE TABLE IF NOT EXISTS node_event (
-  id INTEGER PRIMARY KEY, key_id TEXT NOT NULL, node_id TEXT NOT NULL,
-  from_state TEXT, to_state TEXT NOT NULL, reason TEXT, trace_id TEXT, ts INTEGER NOT NULL
+CREATE TABLE IF NOT EXISTS supplier_offer (
+  supplier_id     TEXT NOT NULL REFERENCES supplier(id),
+  sku             TEXT NOT NULL REFERENCES product(sku),
+  unit_price      INTEGER NOT NULL,
+  moq             INTEGER NOT NULL,
+  lead_time_days  INTEGER NOT NULL,
+  note            TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (supplier_id, sku)
 );
 
-CREATE TABLE IF NOT EXISTS alert (
+CREATE TABLE IF NOT EXISTS purchase_order (
   id                TEXT PRIMARY KEY,
-  kind              TEXT NOT NULL CHECK (kind IN ('decrypt_anomaly','key_margin','shard_loss','tidecloak_down','quorum_stale')),
-  severity          TEXT NOT NULL CHECK (severity IN ('info','warn','crit')),
-  subject           TEXT NOT NULL,
-  status            TEXT NOT NULL CHECK (status IN ('open','proposed','pending_quorum','resolved','denied','dismissed')),
+  sku               TEXT NOT NULL REFERENCES product(sku),
+  supplier_id       TEXT NOT NULL REFERENCES supplier(id),
+  qty               INTEGER NOT NULL CHECK (qty > 0),
+  unit_price        INTEGER NOT NULL,
+  total             INTEGER NOT NULL,
+  status            TEXT NOT NULL CHECK (status IN ('draft','executed','blocked','pending_approval','approved','rejected')),
+  created_by        TEXT NOT NULL,
+  justification     TEXT NOT NULL DEFAULT '',
+  checks_json       TEXT NOT NULL DEFAULT '[]',
   change_request_id TEXT,
-  detail            TEXT,
-  opened_at         INTEGER NOT NULL,
+  exception_json    TEXT,
+  exception_used    INTEGER NOT NULL DEFAULT 0, -- a quorum approval executes exactly one PO, once
+  created_at        INTEGER NOT NULL,
   updated_at        INTEGER NOT NULL
 );
--- At most one active alert per (kind, subject) so rules don't spam.
-CREATE UNIQUE INDEX IF NOT EXISTS ux_alert_active ON alert(kind, subject)
-  WHERE status IN ('open','proposed','pending_quorum');
+CREATE INDEX IF NOT EXISTS ix_po_status ON purchase_order(status);
 
-CREATE TABLE IF NOT EXISTS change_request_mirror (
-  id TEXT PRIMARY KEY, status TEXT NOT NULL, summary TEXT,
-  approvals INTEGER NOT NULL DEFAULT 0, required INTEGER NOT NULL DEFAULT 2, updated_at INTEGER NOT NULL
+CREATE TABLE IF NOT EXISTS agent_run (
+  id          TEXT PRIMARY KEY,
+  started_by  TEXT NOT NULL,
+  started_at  INTEGER NOT NULL,
+  finished_at INTEGER,
+  summary     TEXT
 );
 
-CREATE TABLE IF NOT EXISTS audit_log (     -- hash = sha256(prev_hash || seq || actor_hash || action || target || ts)
-  seq INTEGER PRIMARY KEY, actor_hash TEXT NOT NULL, action TEXT NOT NULL, target TEXT,
+CREATE TABLE IF NOT EXISTS audit_log (     -- hash = sha256(prev_hash || seq || actor || action || target || ts)
+  seq INTEGER PRIMARY KEY, actor TEXT NOT NULL, action TEXT NOT NULL, target TEXT,
   ts INTEGER NOT NULL, prev_hash TEXT NOT NULL, hash TEXT NOT NULL
 );

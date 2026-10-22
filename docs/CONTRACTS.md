@@ -1,58 +1,57 @@
-# Tide Watch — Contracts & overrides
+# ProcureGuard — Contracts & ownership
 
-Overrides `docs/DESIGN.md` where they conflict. Types: `shared/types.ts`. Schema: `server/schema.sql`. Only the orchestrator edits these three files.
+Types: `shared/types.ts`. Schema: `server/schema.sql`. Design: `docs/DESIGN.md`. Only the orchestrator edits these four.
 
-## Decisions (override DESIGN)
+## Decisions
 | # | Decision | Why |
 |---|---|---|
-| D1 | `web/` = Vite + React 19 + `@tidecloak/react` (same layout as the reference repo), not Next.js | Reference login flow already works; no SSR needed |
-| D2 | `server/` = Node 18 + Hono + better-sqlite3 + SSE, run with `tsx`, test with `vitest@2` | Host Node is 18.19.1; newer vite/vitest/better-sqlite3 need ≥20/22 |
-| D3 | Metrics stack = the single `grafana/otel-lgtm` container already in `docker-compose.yml` | Measured working 12:45 (DESIGN §11.1) |
-| D4 | ORK layer = in-process simulator in `server/`; real TideCloak series (`tide_token_issue_*`, `tide_midgard_op_*`, `tide_crypto_*`) read from Prometheus | `tide_*` series do exist on `:9000/metrics` after the first Tide op (measured 12:4x, 33 lines) — DESIGN §11.1 "U2 = không" is outdated |
-| D5 | All durations × `TIME_SCALE` (default 1, demo 0.01) | "down→lost 30'" is not demoable |
-| D6 | Staff "Open all" = one `doDecrypt([...N])`; beacon sends `count=N`; rule sums `count` | 50 sequential decrypts × 1.5–4 s is too slow for the video |
-| D7 | Actor always comes from the verified JWT; server keeps an in-memory `Map<actor_hash, sub>` (not persisted) for propose-revoke | Revoke needs the real user id; persisting `sub` would contradict NFR4 |
-| D8 | Realm `accessTokenLifespan` = 60 s and Staff calls `updateToken` before each decrypt | A revoked role stays in an already-issued token until it expires, so "bị chặn" would not show in the demo |
-| D9 | `AUTH_MODE=dev` accepts header `X-Dev-Sub` + `X-Dev-Roles: role1,role2` instead of a JWT | Agents/tests can't do Tide enclave login |
-| D10 | Dropped: auto bootstrap of the realm, §9.3 drill-down, ML, multi-vantage | Time |
+| D1 | Web = Vite + React 19 + `@tidecloak/react` (reference-repo layout) in `web/` | Kept from v1 |
+| D2 | Server = Node 18 + Hono + better-sqlite3 + jose + vitest@2, `tsx` | Host Node 18.19.1 |
+| D3 | Realm = `test1` (already Tide-licensed, IGA on) | `tidewatch` licence setup failed on Tide's ORK network `[measured]` |
+| D4 | Agents are TideCloak confidential clients; they call our HTTP API with their own token | Enforcement must not trust in-process callers |
+| D5 | Quantities/limits are deterministic; Claude only chooses supplier among offers, writes text, and may *propose* bad things | LLM is never the authority |
+| D6 | LLM = `@anthropic-ai/sdk`, model env `LLM_MODEL` default `claude-opus-5-5`, `output_config.effort: "low"`, structured output via `client.messages.parse` + `zodOutputFormat`; `LLM_MODE=off` or missing key → deterministic stub text | Anthropic tokens available; demo must not die without them |
+| D7 | Exception approval = IGA CR "GRANT `proc.exception-submit` → agent-planner" opened by `tidewatch-sa`; IGA status `APPROVED`/`COMMITTED` = approved, `DENIED` = rejected | Uses Tide quorum, not an app table |
+| D8 | `AUTH_MODE=dev` accepts `X-Dev-Sub` + `X-Dev-Roles` (comma list); agents in dev mode send their role via these headers | Tests/offline |
+| D9 | Realm role/grant calls may return **202 or 204 with a CR created**; after any 2xx, look up the newest PENDING CR for that entity to get its id | Measured on `test1` |
 
-## Ports & env
-| Service | Port | Env |
-|---|---|---|
-| tidecloak | 8080 (OIDC/admin), 9000 (health/metrics) | `KC_BOOTSTRAP_ADMIN_*` |
-| lgtm | 3001 (Grafana), 4317/4318 (OTLP), Prometheus internal :9090 | — |
-| server | 4000 | `PORT=4000`, `TIDECLOAK_URL=http://localhost:8080`, `REALM=tidewatch`, `CLIENT_ID=tidewatch-app`, `SA_CLIENT_ID=tidewatch-sa`, `SA_CLIENT_SECRET`, `PROM_URL=http://localhost:9090`, `HMAC_KEY`, `DB_PATH=./data/tidewatch.db`, `SIMULATOR=on`, `TIME_SCALE=1`, `AUTH_MODE=jwt\|dev` |
-| web | 5137 (vite dev, proxies `/api` → :4000) | `public/tidecloak.json` (downloaded from the admin console, gitignored) |
+## Env (server)
+`PORT=4000 TIDECLOAK_URL=http://localhost:8080 REALM=test1 AUTH_MODE=jwt|dev HMAC_KEY DB_PATH=./data/procure.db`
+`SA_CLIENT_ID=tidewatch-sa SA_CLIENT_SECRET` · `AGENT_ANALYST_SECRET AGENT_PLANNER_SECRET AGENT_EXCEPTION_SECRET`
+`ANTHROPIC_API_KEY LLM_MODEL=claude-opus-5-5 LLM_MODE=on|off API_BASE=http://localhost:4000`
+Load with `set -a; . ./.env; set +a` (no dotenv).
 
 ## Ownership
 | Path | Track |
 |---|---|
-| `shared/`, `server/schema.sql`, `docs/CONTRACTS.md`, root `package.json` | orchestrator |
-| `docker-compose.yml`, `infra/`, `server/src/iga.ts`, `web/src/pages/Approver.jsx` | A infra-iga |
-| `web/src/lib/tide.js`, `web/src/pages/{Customer,Staff}.jsx`, `web/src/App.jsx` | B web-kyc |
-| `server/src/{index,db,auth,rules,alerts,audit,sse,hmac}.ts` | C server-core |
-| `server/src/{simulator,metrics,chaos}.ts`, `web/src/pages/{Monitor,Platform}.jsx`, `web/src/lib/stream.js` | D sim-platform |
-| `README.md`, `docs/DEMO.md` | docs |
+| `shared/`, `server/schema.sql`, `docs/{DESIGN,CONTRACTS}.md`, root `package.json` | orchestrator |
+| `server/src/{index,db,auth,policy,replenish,seed,audit,sse,hmac}.ts`, `server/test/core-*.test.ts` | **P1 core** |
+| `server/src/agents/*`, `server/src/llm.ts`, `server/test/agents-*.test.ts` | **P2 agents** |
+| `server/src/{iga,governance}.ts`, `server/test/{iga,gov}-*.test.ts`, `web/src/pages/Approver.jsx`, `infra/realm/README.md` | **P3 governance** |
+| `web/` except `pages/Approver.jsx` | **P4 web** |
+| `README.md`, `docs/DEMO.md` | docs (after merge) |
 
-## Routes
-| Method | Path | Role | Req → Res (types in `shared/types.ts`) | Owner |
-|---|---|---|---|---|
-| GET | `/api/me` | any | → `MeRes` | C |
-| POST | `/api/kyc` | CUSTOMER | `KycCreateReq` → 201 `KycCreateRes` | C |
-| GET | `/api/kyc` | STAFF | `?limit&cursor` → `KycListRes` | C |
-| POST | `/api/telemetry/decrypt` | any | `DecryptBeaconReq` → 202 | C |
-| GET | `/api/stream` | MONITOR/PLATFORM/APPROVER | SSE `StreamEvent`; JWT via `?access_token=` (EventSource has no headers) | C |
-| GET | `/api/alerts` | MONITOR | `?status` → `AlertsRes` | C |
-| POST | `/api/alerts/:id/propose-revoke` | MONITOR | → 202 `ProposeRevokeRes` (calls `iga.revokeRole`) | C + A (`iga.ts`) |
-| POST | `/api/alerts/:id/dismiss` | MONITOR | `DismissReq` → 200 | C |
-| GET | `/api/change-requests` | APPROVER | `?status` → `ChangeRequestsRes` | A |
-| GET | `/api/nodes` | PLATFORM/MONITOR | `?key_id` → `NodesRes` | D |
-| POST | `/api/chaos` | PLATFORM, `SIMULATOR=on` | `ChaosReq` → 200 `NodesRes` | D |
-| GET | `/api/metrics` | none | Prometheus text, `tidewatch_*` + simulated `tide_ork_*` | D |
+## Routes (all under `/api`, all JSON, auth on all except `/api/health`)
+| Method | Path | Permission | Owner |
+|---|---|---|---|
+| GET | `/me` | any | P1 |
+| GET | `/inventory` | inventory:read | P1 |
+| GET | `/suppliers?sku=` | supplier:read | P1 |
+| POST | `/po` | po:draft | P1 |
+| POST | `/po/:id/submit` | po:submit (+ quorum path) | P1 (calls P3 `openExceptionRequest`) |
+| GET | `/po?status=` | po:read | P1 |
+| POST | `/po/:id/exception-report` | exception:report | P1 |
+| POST | `/agents/run` | agents:run | P1 mounts, P2 implements `runCycle` |
+| POST | `/demo/inject` | demo:inject | P1 |
+| GET | `/audit` | audit:read | P1 |
+| GET | `/stream` | any (`?access_token=` or dev query) | P1 |
+| GET | `/change-requests` | APPROVER | P3 |
+| GET | `/health` | none | P1 |
 
-Approver authorize/deny goes browser → TideCloak IGA directly with the approver's own token (DESIGN §8.1 note); the server never approves.
-
-## Module seams (so tracks compile independently)
-- `server/src/iga.ts` exports `revokeRole(sub: string, role: string): Promise<{change_request_id: string}>`, `listChangeRequests(status?: string): Promise<ChangeRequest[]>`; throws `IgaError{code: 'FORBIDDEN'|'CONFLICT'|'QUORUM_NOT_MET'|'ENTITY_VANISHED'|'UNEXPECTED', status}`.
-- `server/src/sse.ts` exports `publish(ev: StreamEvent): void`; D's simulator calls it, C owns it.
-- `server/src/simulator.ts` exports `getNodes(key_id): NodesRes`, `chaos(req: ChaosReq): NodesRes`, `tick(now): StreamEvent[]`; C's index.ts mounts D's routes via `registerSimRoutes(app)`.
+## Module seams (compile independently; missing modules are optional imports)
+- P1 `policy.ts`: `evaluateSubmit(po, actor: {label, roles}, ctx: {now, dailySpent, supplier, product, recommendation, quorumApproved: boolean}) → {status, checks}` — pure function.
+- P1 `sse.ts`: `publish(ev: StreamEvent)`; `audit.ts`: `append(actor, action, target)`, `verify()`.
+- P2 `agents/index.ts`: `runCycle(opts: {apiBase, runId, log: (agent, step, message) => void}) → Promise<{summary}>`; `retryApproved(poId)` (planner re-submits with a fresh token).
+- P2 `agents/token.ts`: `getAgentToken(name: AgentName) → Promise<{headers: Record<string,string>}>` (jwt: client_credentials; dev: X-Dev headers).
+- P3 `iga.ts`: `openExceptionRequest(poId, agentClientId) → {change_request_id}`; `getChangeRequest(id) → ChangeRequest`; `listChangeRequests(status?)`; `registerIgaRoutes(app)`; `IgaError`.
+- P3 `governance.ts`: `startGovernance({onApproved(poId), onRejected(poId)})` — polls open CRs every 3 s.

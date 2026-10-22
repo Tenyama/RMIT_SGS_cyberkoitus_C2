@@ -1,8 +1,10 @@
-// Mirror of ROLES in shared/types.ts (keep in sync; web is plain JS).
+// Mirrors ROLES in shared/types.ts (web is plain JS).
 export const ROLES = {
-  CUSTOMER: "_tide_kyc.selfencrypt",
-  STAFF: "_tide_kyc.selfdecrypt",
-  MONITOR: "tw-monitor",
-  PLATFORM: "tw-platform",
-  APPROVER: "tide-realm-admin", // client role on realm-management
+  AGENT_ANALYST: "agent.analyst",
+  AGENT_PLANNER: "agent.planner",
+  AGENT_EXCEPTION: "agent.exception",
+  EXCEPTION_SUBMIT: "proc.exception-submit",
+  BUYER: "proc.buyer",
+  AUDITOR: "proc.auditor",
+  APPROVER: "tide-realm-admin",
 };
