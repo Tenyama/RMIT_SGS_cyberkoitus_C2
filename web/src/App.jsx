@@ -14,7 +14,7 @@ export default function App() {
 
 function DevApp() {
   const auth = useMemo(
-    () => ({ getToken: async () => null, logout: null, isApprover: false, mode: `dev · ${DEV.sub}` }),
+    () => ({ getToken: async () => null, logout: null, isApprover: false, mode: "DEV" }),
     [],
   );
   return <Shell auth={auth} />;
@@ -27,12 +27,12 @@ function TideApp() {
       getToken,
       logout,
       isApprover: authenticated ? hasClientRole(ROLES.APPROVER, "realm-management") : false,
-      mode: "Tide",
+      mode: "TIDE",
     }),
     [getToken, logout, hasClientRole, authenticated],
   );
-  if (isInitializing) return <Splash text="Đang kết nối TideCloak…" />;
-  if (initError) return <Splash text={`Lỗi TideCloak: ${initError.message}`} error />;
+  if (isInitializing) return <Splash text="Connecting to TideCloak…" />;
+  if (initError) return <Splash text={`TideCloak error: ${initError.message}`} error />;
   if (!authenticated) return <Login onLogin={login} />;
   return <Shell auth={auth} />;
 }
@@ -41,7 +41,7 @@ function Splash({ text, error }) {
   return (
     <div className="login-page">
       <div className={`login-card ${error ? "err" : ""}`}>
-        <div className="brand-lg">🛡️ ProcureGuard</div>
+        <div className="brand-lg">ProcureGuard</div>
         <p>{text}</p>
       </div>
     </div>
@@ -53,17 +53,17 @@ function Login({ onLogin }) {
   return (
     <div className="login-page">
       <div className="login-card">
-        <div className="brand-lg">🛡️ ProcureGuard</div>
-        <h1>AI agent tự động mua hàng — nhưng không bao giờ tự cấp quyền</h1>
+        <div className="brand-lg">ProcureGuard</div>
+        <h1>AI agents buy for you — but can never grant themselves authority</h1>
         <p className="muted">
-          Mọi đơn mua do AI agent đề xuất đều đi qua chính sách cứng. Vượt hạn mức → cần quorum phê duyệt trên
-          Tide. Không ai, kể cả AI, nắm “chìa khóa vạn năng”.
+          Every purchase order an AI agent proposes goes through hard policy. Over the limit → it needs a quorum
+          approval on Tide. Nobody, not even the AI, holds a master key.
         </p>
         <ul className="login-points">
-          <li>🤖 3 AI agent — mỗi agent một danh tính TideCloak riêng</li>
-          <li>📏 Chính sách: hạn mức 10.000.000 ₫/đơn, 30.000.000 ₫/ngày</li>
-          <li>🔐 Ngoại lệ chỉ mở được bằng quorum người duyệt</li>
-          <li>🧾 Nhật ký kiểm toán chuỗi hash</li>
+          <li>3 AI agents — each with its own TideCloak identity</li>
+          <li>Policy: 10,000,000 VND per order, 30,000,000 VND per day</li>
+          <li>Exceptions unlock only with an approver quorum</li>
+          <li>Hash-chained audit log</li>
         </ul>
         <button
           className="btn primary xl"
@@ -73,7 +73,7 @@ function Login({ onLogin }) {
             try { await onLogin(); } finally { setBusy(false); }
           }}
         >
-          {busy ? "Đang chuyển hướng…" : "Đăng nhập với Tide"}
+          {busy ? "Redirecting…" : "Sign in with Tide"}
         </button>
       </div>
     </div>
@@ -102,9 +102,9 @@ function Shell({ auth }) {
     if (!me) return [];
     const roles = me.roles || [];
     const t = [];
-    if (roles.includes(ROLES.BUYER)) t.push({ id: "dash", label: "Bảng điều khiển" });
-    if (roles.includes(ROLES.APPROVER) || auth.isApprover) t.push({ id: "approve", label: "Phê duyệt" });
-    if (roles.includes(ROLES.AUDITOR)) t.push({ id: "audit", label: "Kiểm toán" });
+    if (roles.includes(ROLES.BUYER)) t.push({ id: "dash", label: "Dashboard" });
+    if (roles.includes(ROLES.APPROVER) || auth.isApprover) t.push({ id: "approve", label: "Approvals" });
+    if (roles.includes(ROLES.AUDITOR)) t.push({ id: "audit", label: "Audit" });
     return t;
   }, [me, auth.isApprover]);
 
@@ -113,7 +113,7 @@ function Shell({ auth }) {
   return (
     <div className="app">
       <header className="topbar">
-        <div className="brand">🛡️ ProcureGuard</div>
+        <div className="brand"><span className="logo" aria-hidden="true">◆</span> ProcureGuard</div>
         <nav className="tabs">
           {tabs.map((t) => (
             <button key={t.id} className={`tab ${active === t.id ? "active" : ""}`} onClick={() => setTab(t.id)}>
@@ -122,29 +122,29 @@ function Shell({ auth }) {
           ))}
         </nav>
         <div className="row">
-          {me && <span className="pill">{me.actor}</span>}
-          <span className="pill">{auth.mode}</span>
+          {me && <span className="user">{me.actor}</span>}
+          <span className={`mode-badge ${auth.mode === "DEV" ? "dev" : "tide"}`}>{auth.mode}</span>
           {auth.logout && (
-            <button className="btn" onClick={() => auth.logout()}>
-              Đăng xuất
+            <button className="btn ghost" onClick={() => auth.logout()}>
+              Sign out
             </button>
           )}
         </div>
       </header>
 
-      {err && <div className="alert err">Không tải được /api/me: {err}</div>}
-      {!me && !err && <p className="center muted">Đang tải…</p>}
+      {err && <div className="alert err">Could not load /api/me: {err}</div>}
+      {!me && !err && <p className="center muted">Loading…</p>}
       {me && tabs.length === 0 && (
         <div className="alert warn">
-          Tài khoản <b>{me.actor}</b> chưa có vai trò nào (proc.buyer / proc.auditor / tide-realm-admin).
+          Account <b>{me.actor}</b> has no role yet (proc.buyer / proc.auditor / tide-realm-admin).
         </div>
       )}
 
       {active === "dash" && <Dashboard getToken={auth.getToken} />}
       {active === "audit" && <Audit getToken={auth.getToken} />}
       {active === "approve" && (
-        <Boundary fallback="Trang phê duyệt cần đăng nhập Tide thật (không chạy ở chế độ dev).">
-          <Suspense fallback={<p className="center muted">Đang tải…</p>}>
+        <Boundary fallback="The approvals page needs a real Tide sign-in (not available in dev mode).">
+          <Suspense fallback={<p className="center muted">Loading…</p>}>
             <Approver />
           </Suspense>
         </Boundary>

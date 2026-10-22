@@ -1,16 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { computeKpis, formatVND, groupPosByStatus, upsertById } from "./format.js";
-
-const norm = (s) => s.replace(/\s/g, " "); // Intl uses NBSP before ₫
+import {
+  computeKpis, formatVND, groupLogsByRun, groupPosByStatus, isSimulatedCr, mergeById, upsertById,
+} from "./format.js";
 
 describe("formatVND", () => {
-  it("formats with vi-VN thousands dots and ₫", () => {
-    expect(norm(formatVND(80_000_000))).toBe("80.000.000 ₫");
-    expect(norm(formatVND(1234.6))).toBe("1.235 ₫");
+  it("formats with en-US thousands commas and VND suffix", () => {
+    expect(formatVND(80_000_000)).toBe("80,000,000 VND");
+    expect(formatVND(1234.6)).toBe("1,235 VND");
   });
   it("treats junk as 0", () => {
-    expect(norm(formatVND(undefined))).toBe("0 ₫");
-    expect(norm(formatVND("abc"))).toBe("0 ₫");
+    expect(formatVND(undefined)).toBe("0 VND");
+    expect(formatVND("abc")).toBe("0 VND");
   });
 });
 
@@ -22,14 +22,14 @@ describe("groupPosByStatus", () => {
     { id: "d", status: "pending_approval", updated_at: 3 },
     { id: "e", status: "draft", updated_at: 4 },
     { id: "f", status: "rejected", updated_at: 4 },
+    { id: "g", status: "approved", updated_at: 6 },
   ];
-  it("puts each PO in its column, newest first, drops drafts", () => {
+  it("puts each PO in its column, newest first, drops drafts, merges approved+rejected", () => {
     const g = groupPosByStatus(pos);
     expect(g.executed.map((p) => p.id)).toEqual(["c", "a"]);
     expect(g.blocked.map((p) => p.id)).toEqual(["b"]);
-    expect(g.pending_approval.map((p) => p.id)).toEqual(["d"]);
-    expect(g.approved).toEqual([]);
-    expect(g.rejected.map((p) => p.id)).toEqual(["f"]);
+    expect(g.pending.map((p) => p.id)).toEqual(["d"]);
+    expect(g.resolved.map((p) => p.id)).toEqual(["g", "f"]);
     expect(Object.values(g).flat().some((p) => p.id === "e")).toBe(false);
   });
   it("handles null input", () => {
@@ -60,5 +60,42 @@ describe("upsertById", () => {
     const l = [{ id: "a", v: 1 }, { id: "b", v: 1 }];
     expect(upsertById(l, { id: "b", v: 2 })).toEqual([{ id: "a", v: 1 }, { id: "b", v: 2 }]);
     expect(upsertById(l, { id: "c", v: 1 })[0].id).toBe("c");
+  });
+});
+
+describe("mergeById", () => {
+  it("keeps one PO per id when it arrives via GET and SSE, newest wins", () => {
+    const fetched = [{ id: "a", updated_at: 1, v: "get" }, { id: "b", updated_at: 1 }];
+    const sse = [{ id: "a", updated_at: 2, v: "sse" }];
+    const m = mergeById(fetched, sse);
+    expect(m.map((x) => x.id).sort()).toEqual(["a", "b"]);
+    expect(m.find((x) => x.id === "a").v).toBe("sse");
+  });
+  it("upsertById ignores items without id", () => {
+    const l = [{ id: "a" }];
+    expect(upsertById(l, undefined)).toBe(l);
+  });
+});
+
+describe("groupLogsByRun", () => {
+  it("returns runs newest-first with entries newest-first, capped", () => {
+    const logs = [
+      { key: 1, run: "r1", ts: 1, message: "a" },
+      { key: 2, run: "r1", ts: 2, message: "b" },
+      { key: 3, run: "r2", ts: 3, message: "c" },
+      { key: 4, run: "r2", ts: 4, message: "d" },
+    ];
+    const g = groupLogsByRun(logs);
+    expect(g.map((r) => r.run)).toEqual(["r2", "r1"]);
+    expect(g[0].entries.map((e) => e.key)).toEqual([4, 3]);
+    expect(groupLogsByRun(logs, 2).map((r) => r.run)).toEqual(["r2"]);
+  });
+});
+
+describe("isSimulatedCr", () => {
+  it("detects dev simulation ids", () => {
+    expect(isSimulatedCr("sim-po_1")).toBe(true);
+    expect(isSimulatedCr("8a1f")).toBe(false);
+    expect(isSimulatedCr(null)).toBe(false);
   });
 });

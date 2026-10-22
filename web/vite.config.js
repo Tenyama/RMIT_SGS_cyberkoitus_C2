@@ -7,7 +7,7 @@ export default defineConfig({
     host: "localhost",
     port: 5137,
     strictPort: true,
-    proxy: { "/api": "http://localhost:4000" },
+    proxy: { "/api": process.env.VITE_API_TARGET || "http://localhost:4000" },
   },
   test: { environment: "jsdom" },
 });
