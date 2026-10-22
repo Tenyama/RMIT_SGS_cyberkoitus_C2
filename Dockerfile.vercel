@@ -1,0 +1,15 @@
+# Vercel container service for the API; web/ is a separate static Vite service (see vercel.json).
+# Build context is the repo root because the server imports ../shared.
+FROM node:20-slim
+WORKDIR /app
+# better-sqlite3 falls back to a source build if no prebuilt binary matches
+RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ && rm -rf /var/lib/apt/lists/*
+COPY shared ./shared
+COPY server/package*.json ./server/
+RUN npm --prefix server ci
+COPY server ./server
+WORKDIR /app/server
+# Vercel routes to :80 unless PORT is set in project settings. The instance filesystem is not
+# durable, so the demo DB reseeds whenever the instance scales down (5 min idle).
+ENV PORT=80 DB_PATH=/tmp/procureguard.db
+CMD ["npx", "tsx", "src/index.ts"]

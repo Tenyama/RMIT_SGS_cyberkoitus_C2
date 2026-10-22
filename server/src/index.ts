@@ -375,6 +375,12 @@ if (isMain) {
   setDb(openDb());
   const app = createApp();
   await mountOptional(app, { governance: true });
+  // Single-container hosting: serve the built web UI (STATIC_DIR, relative to cwd) with an SPA fallback.
+  if (process.env.STATIC_DIR) {
+    const { serveStatic } = await import('@hono/node-server/serve-static');
+    app.use('*', serveStatic({ root: process.env.STATIC_DIR }));
+    app.get('*', serveStatic({ path: `${process.env.STATIC_DIR}/index.html` }));
+  }
   const port = Number(process.env.PORT ?? 4000);
   serve({ fetch: app.fetch, port }, () => console.log(`procureguard server on :${port} (AUTH_MODE=${process.env.AUTH_MODE ?? 'jwt'})`));
 }

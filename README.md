@@ -119,4 +119,8 @@ Open http://localhost:5137. Awaiting-quorum cards show **Simulate quorum approva
 > ```
 > Agents authenticate via dev headers and the **Simulate quorum approval (dev)** button stands in for the Tide quorum.
 
-Docs: [design](docs/DESIGN.md) · [contracts](docs/CONTRACTS.md) · [demo script](docs/DEMO.md)
+### C. Hosted demo (Vercel or Docker)
+
+The offline demo (dev auth, simulated quorum) can be hosted: `vercel deploy --prod` uses [vercel.json](vercel.json) (static web service + containerised API), and the root [Dockerfile](Dockerfile) builds a single image that serves the UI from the API. Env vars, caveats (the Vercel DB is ephemeral) and verification steps are in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+
+Docs: [design](docs/DESIGN.md) · [contracts](docs/CONTRACTS.md) · [demo script](docs/DEMO.md) · [deployment](docs/DEPLOYMENT.md)

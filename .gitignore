@@ -6,3 +6,6 @@ server/data/
 .env
 .remember/
 .claude/
+procureguard-bundle-lite/
+.vercel
+.env*
