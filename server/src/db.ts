@@ -7,7 +7,7 @@ export type Db = Database.Database;
 const SCHEMA = readFileSync(new URL('../schema.sql', import.meta.url), 'utf8');
 
 /** Open (and migrate) a SQLite DB. Use ':memory:' in tests. */
-export function openDb(path: string = process.env.DB_PATH || './data/tidewatch.db'): Db {
+export function openDb(path: string = process.env.DB_PATH || './data/procure.db'): Db {
   if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
   const db = new Database(path);
   db.exec(SCHEMA);
