@@ -3,6 +3,8 @@ dist/
 web/public/tidecloak.json
 server/data/
 *.db
-.env
+!procureguard-bundle-lite/h2/*.db
+# NOTE: .env is intentionally committed for this demo (secrets included on purpose).
+# Remove this line and the .env file before using in production.
 .remember/
 .claude/

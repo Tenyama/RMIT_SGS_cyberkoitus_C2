@@ -79,10 +79,10 @@ Open http://localhost:5137. Awaiting-quorum cards show **Simulate quorum approva
 
 ### B. Real Tide mode (agents with TideCloak tokens, real change requests)
 
-0. (Recommended) Restore the pre-licensed `test1` realm from the bundle instead of creating one:
+0. (Recommended) Restore the pre-licensed `test1` realm from the bundled backup (shipped in `procureguard-bundle-lite/`):
    ```bash
-   sudo bash ~/codean/procureguard/procureguard-bundle-lite/restore.sh
-   # loads tideorg/tidecloak-dev (pinned) + the shipped H2 DB → realm test1, admin/admin
+   sudo bash procureguard-bundle-lite/restore.sh
+   # pulls tideorg/tidecloak-dev (pinned by digest) + loads the shipped H2 DB → realm test1, admin/admin
    ```
    Or, from scratch: `docker compose up -d tidecloak` and follow [infra/realm/README.md](infra/realm/README.md).
 
@@ -92,13 +92,11 @@ Open http://localhost:5137. Awaiting-quorum cards show **Simulate quorum approva
    - confidential clients `agent-analyst`, `agent-planner`, `agent-exception` with service accounts, each holding its matching `agent.*` role;
    - client `tidewatch-sa` with `realm-management` roles `view-realm`, `view-events`, `view-clients`, `manage-users`, `manage-realm`;
    - every change is a change request: approve it under **Change requests** in the console.
-3. Put the secrets in `.env` at the repo root (it is gitignored):
+3. Secrets live in `.env` at the repo root (committed to the repo deliberately for this demo, so judges don't have to create it). The file is already present — just source it:
    ```
-   SA_CLIENT_SECRET=...
-   AGENT_ANALYST_SECRET=...
-   AGENT_PLANNER_SECRET=...
-   AGENT_EXCEPTION_SECRET=...
+   set -a; . ./.env; set +a
    ```
+   The same values are mirrored in `procureguard-bundle-lite/procureguard.env`. **Do not reuse these secrets in production.**
 4. Run (Node 22 on PATH):
    ```bash
    export PATH="$HOME/.local/share/node22/bin:$PATH"
