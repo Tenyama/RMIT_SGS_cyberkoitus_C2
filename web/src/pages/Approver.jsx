@@ -3,10 +3,10 @@
 // ProcureGuard never authorizes, denies or commits a change request.
 import { useCallback, useEffect, useState } from "react";
 import { useTideCloak } from "@tidecloak/react";
+import { STATUS_LINE, formatTime, formatVND, formatNum } from "../lib/format.js";
 
 const POLL_MS = 5000;
-const vnd = (n) => new Intl.NumberFormat("vi-VN", { style: "currency", currency: "VND", maximumFractionDigits: 0 }).format(n ?? 0);
-const REC = { approve: "Đề xuất duyệt", reject: "Đề xuất từ chối", investigate: "Cần điều tra" };
+const REC = { approve: "Recommend approve", reject: "Recommend reject", investigate: "Investigate" };
 
 function consoleUrl(config) {
   const base = String(config?.["auth-server-url"] ?? "http://localhost:8080").replace(/\/$/, "");
@@ -19,32 +19,57 @@ async function getJson(path, token) {
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;
     try { msg = (await res.json()).error ?? msg; } catch { /* non-JSON */ }
-    throw new Error(res.status === 403 ? "403 — tài khoản không có quyền approver (tide-realm-admin)" : msg);
+    throw new Error(res.status === 403 ? "403 — this account is not an approver (tide-realm-admin)" : msg);
   }
   return res.json();
 }
 
 function PoDetails({ po }) {
-  if (!po) return <small style={{ color: "#666" }}>Chưa tìm thấy đơn hàng liên kết.</small>;
-  const failed = (po.checks ?? []).filter((c) => !c.ok);
+  const [open, setOpen] = useState(false);
+  if (!po) return <div className="muted small">Linked purchase order not found yet.</div>;
+  const checks = po.checks ?? [];
+  const failed = checks.filter((c) => !c.ok);
   const rep = po.exception_report;
   return (
     <div>
-      <div>
-        <strong>{po.sku}</strong> · NCC <strong>{po.supplier_id}</strong> · SL <strong>{po.qty}</strong> × {vnd(po.unit_price)} ={" "}
-        <strong>{vnd(po.total)}</strong>
+      <div className="po-head">
+        <code className="po-sku">{po.sku}</code>
+        <span className="po-total">{formatVND(po.total)}</span>
       </div>
-      <small style={{ color: "#666" }}>Đơn {po.id} · tạo bởi {po.created_by}</small>
+      <div className="po-meta">
+        <span>{po.supplier_id}</span>
+        <span className="muted">{formatNum(po.qty)} × {formatVND(po.unit_price)}</span>
+      </div>
+      <div className="po-status">{STATUS_LINE[po.status] ?? po.status}</div>
+      {checks.length > 0 && failed.length === 0 && (
+        <div className="checks-ok">{checks.length}/{checks.length} rules passed ✓</div>
+      )}
       {failed.length > 0 && (
-        <ul style={{ margin: "4px 0", color: "crimson" }}>
-          {failed.map((c) => <li key={c.rule}>{c.rule}: {c.detail}</li>)}
+        <ul className="checks fail">
+          {failed.map((c) => <li key={c.rule}><b>{c.rule}</b> <span>{c.detail}</span></li>)}
         </ul>
       )}
-      {po.justification && <div><em>Lý do (do AI viết, không tin cậy):</em> {po.justification}</div>}
       {rep && (
-        <div style={{ marginTop: 4 }}>
-          <strong>Báo cáo ngoại lệ:</strong> {rep.summary} — <strong>{REC[rep.recommendation] ?? rep.recommendation}</strong>
-          {rep.risk_flags?.length > 0 && <div><small>Cờ rủi ro: {rep.risk_flags.join(", ")}</small></div>}
+        <div className="callout">
+          <div className="callout-head">Exception report · <b>{REC[rep.recommendation] ?? rep.recommendation}</b></div>
+          <div className="callout-body">{rep.summary}</div>
+          {rep.risk_flags?.length > 0 && (
+            <div className="flags">{rep.risk_flags.map((f) => <span key={f} className="flag">{f}</span>)}</div>
+          )}
+        </div>
+      )}
+      <button className="link-btn" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
+        {open ? "Hide details" : "Details"}
+      </button>
+      {open && (
+        <div className="po-details">
+          <div className="small muted">PO {po.id} · created by {po.created_by}</div>
+          {po.justification && (
+            <div className="untrusted">
+              <div className="untrusted-label">AI rationale (untrusted)</div>
+              <div>{po.justification}</div>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -79,7 +104,7 @@ export default function Approver() {
     return () => clearInterval(t);
   }, [authenticated, load]);
 
-  if (!authenticated) return <p>Đăng nhập bằng tài khoản approver để xem yêu cầu phê duyệt.</p>;
+  if (!authenticated) return <p className="center muted">Sign in with an approver account to see approval requests.</p>;
 
   let cfg = null;
   try { cfg = getConfig(); } catch { /* config not loaded yet */ }
@@ -88,33 +113,28 @@ export default function Approver() {
 
   return (
     <section>
-      <h2>Yêu cầu phê duyệt (IGA)</h2>
-      <p>
-        <a href={url} target="_blank" rel="noopener noreferrer">
-          <button>Duyệt trong TideCloak</button>
-        </a>{" "}
-        <small>Mục Change requests → duyệt bằng Tide</small>
-      </p>
-      {loadError && <p style={{ color: "crimson" }}>Không tải được: {loadError}</p>}
-      {items.length === 0 && !loadError && <p>Không có yêu cầu nào đang chờ.</p>}
-      <table style={{ borderCollapse: "collapse", width: "100%" }}>
-        <tbody>
-          {items.map((cr) => (
-            <tr key={cr.id} style={{ borderBottom: "1px solid #ddd", verticalAlign: "top" }}>
-              <td style={{ padding: 8 }}>
-                <div><strong>{cr.summary || cr.id}</strong></div>
-                <small style={{ color: "#666" }}>
-                  {cr.id} · {cr.status} · {new Date(cr.updated_at).toLocaleTimeString("vi-VN")}
-                </small>
-              </td>
-              <td style={{ padding: 8 }}><PoDetails po={poFor(cr)} /></td>
-              <td style={{ padding: 8, whiteSpace: "nowrap" }}>
-                <strong>{cr.approvals}/{cr.required}</strong> chữ ký
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <div className="row between audit-top">
+        <h2>Approval requests (IGA)</h2>
+        <a className="btn primary" href={url} target="_blank" rel="noopener noreferrer">Approve in TideCloak</a>
+      </div>
+      <p className="muted small">Open Change requests in the TideCloak console and sign with your Tide key. ProcureGuard never approves anything itself.</p>
+      {loadError && <div className="alert err">Could not load: {loadError}</div>}
+      {items.length === 0 && !loadError && <div className="empty">No pending requests.</div>}
+      <div className="approver-grid">
+        {items.map((cr) => (
+          <article key={cr.id} className="po s-pending_approval">
+            <div className="cta">
+              <div className="cta-info">
+                <span className="muted small">Change request</span> <code>{cr.id}</code>
+                <span className="cta-q">{cr.approvals}/{cr.required} approvals</span>
+              </div>
+              <span className="muted small">{cr.status} · {formatTime(cr.updated_at)}</span>
+            </div>
+            {cr.summary && <div className="po-name">{cr.summary}</div>}
+            <PoDetails po={poFor(cr)} />
+          </article>
+        ))}
+      </div>
     </section>
   );
 }

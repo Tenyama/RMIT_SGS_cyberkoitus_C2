@@ -28,22 +28,22 @@ export default function Audit({ getToken }) {
   return (
     <div>
       <div className="row between audit-top">
-        <h2>Nhật ký kiểm toán</h2>
+        <h2>Audit log</h2>
         <button className="btn" onClick={load} disabled={loading}>
-          {loading ? "Đang tải…" : "↻ Tải lại"}
+          {loading ? <><span className="spinner" aria-hidden="true" /> Loading…</> : "Reload"}
         </button>
       </div>
-      {err && <div className="alert err">Không tải được /api/audit: {err}</div>}
+      {err && <div className="alert err">Could not load /api/audit: {err}</div>}
       {data && (
         <div className={`banner ${data.valid ? "ok" : "bad"}`}>
-          {data.valid ? "Chuỗi hash hợp lệ ✓" : "Bị sửa ✗ — chuỗi hash không khớp"}
-          <span className="banner-sub">{items.length} bản ghi</span>
+          {data.valid ? "Hash chain valid ✓" : "Tampered ✗ — hash chain does not match"}
+          <span className="banner-sub">{items.length} entries</span>
         </div>
       )}
-      <div className="card table-wrap">
-        <table className="table">
+      <div className="panel table-wrap">
+        <table className="table compact">
           <thead>
-            <tr><th className="num">#</th><th>Tác nhân</th><th>Hành động</th><th>Đối tượng</th><th>Thời gian</th><th>Hash</th></tr>
+            <tr><th className="num">#</th><th>Actor</th><th>Action</th><th>Target</th><th>Time</th><th>Hash</th></tr>
           </thead>
           <tbody>
             {items.map((e) => (
@@ -56,7 +56,7 @@ export default function Audit({ getToken }) {
                 <td><code className="hash" title={e.hash}>{String(e.hash || "").slice(0, 12)}…</code></td>
               </tr>
             ))}
-            {data && !items.length && <tr><td colSpan={6} className="muted">Chưa có bản ghi.</td></tr>}
+            {data && !items.length && <tr><td colSpan={6} className="muted">No entries yet.</td></tr>}
           </tbody>
         </table>
       </div>
