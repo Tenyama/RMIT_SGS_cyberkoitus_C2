@@ -1,11 +1,19 @@
-// TideCloak IGA client (track A). Server side only ever *proposes* (revoke via tidewatch-sa)
-// and *reads* change requests; approvers authorize/deny from the browser with their own token.
-// IGA shapes measured from iga-core-1.0-SNAPSHOT.jar (IgaChangeRequestRepresentation,
-// IgaPendingApprovalExceptionMapper: 202 {status, changeRequestId, ...} + Location header).
+// TideCloak IGA client (track P3). The server only ever *opens* change requests (via tidewatch-sa)
+// and *reads* them; approvers authorize in the TideCloak admin console with their Tide enclave.
+// Shapes measured on realm test1: realm changes → 202 {changeRequestId} (sometimes 204, D9);
+// GET /iga/change-requests/{id} → {id, entityType, entityId, actionType, rows, status,
+// authorizationCount, threshold, readyToCommit, createdAt, resolvedAt, ...}; unknown id → 404;
+// listing without ?status= returns [] so we always pass one.
 import type { Hono } from 'hono';
 import { ROLES, type ChangeRequest, type ChangeRequestsRes } from '../../shared/types.ts';
 
-export type IgaErrorCode = 'FORBIDDEN' | 'CONFLICT' | 'QUORUM_NOT_MET' | 'ENTITY_VANISHED' | 'UNEXPECTED';
+export type IgaErrorCode =
+  | 'FORBIDDEN'
+  | 'CONFLICT'
+  | 'QUORUM_NOT_MET'
+  | 'ENTITY_VANISHED'
+  | 'ROLE_STILL_GRANTED' // agent still holds proc.exception-submit; a revoke CR must be approved first (manual)
+  | 'UNEXPECTED';
 
 export class IgaError extends Error {
   constructor(public code: IgaErrorCode, public status: number, message?: string) {
@@ -18,7 +26,7 @@ const STATUS_CODE: Record<number, IgaErrorCode> = { 403: 'FORBIDDEN', 409: 'CONF
 
 function env() {
   const base = (process.env.TIDECLOAK_URL ?? 'http://localhost:8080').replace(/\/$/, '');
-  const realm = process.env.REALM ?? 'tidewatch';
+  const realm = process.env.REALM ?? 'test1';
   return {
     base,
     realm,
@@ -28,13 +36,36 @@ function env() {
   };
 }
 
+// ---------- tracked CRs (crId -> PO) ----------
+export interface TrackedCr {
+  poId: string;
+  agentClientId: string;
+  simulated?: boolean; // dev-only synthetic approval (governance.simulateApproval)
+}
+const tracked = new Map<string, TrackedCr>();
+
+/** Register a CR → PO link (openExceptionRequest does this; P1 may call it on boot to rehydrate from DB). */
+export function trackChangeRequest(crId: string, poId: string, agentClientId = ''): void {
+  tracked.set(crId, { poId, agentClientId });
+}
+export function untrackChangeRequest(crId: string): void {
+  tracked.delete(crId);
+}
+export function trackedChangeRequests(): [string, TrackedCr][] {
+  return [...tracked.entries()];
+}
+export function poIdFor(crId: string): string | null {
+  return tracked.get(crId)?.poId ?? null;
+}
+
 let tokenCache: { token: string; exp: number } | null = null;
 const roleCache = new Map<string, Record<string, unknown>>();
 
-/** Test hook: drop cached SA token and role representations. */
+/** Test hook: drop cached SA token, role representations and tracked CRs. */
 export function _resetIgaCache() {
   tokenCache = null;
   roleCache.clear();
+  tracked.clear();
 }
 
 async function fail(res: Response, what: string): Promise<never> {
@@ -66,14 +97,25 @@ async function adminFetch(path: string, init: RequestInit = {}): Promise<Respons
   });
 }
 
+async function adminJson<T>(path: string, what: string): Promise<T> {
+  const res = await adminFetch(path);
+  if (!res.ok) await fail(res, what);
+  return (await res.json()) as T;
+}
+
 async function getRoleRep(role: string): Promise<Record<string, unknown>> {
   const hit = roleCache.get(role);
   if (hit) return hit;
-  const res = await adminFetch(`/roles/${encodeURIComponent(role)}`);
-  if (!res.ok) await fail(res, `role ${role}`);
-  const rep = (await res.json()) as Record<string, unknown>;
+  const rep = await adminJson<Record<string, unknown>>(`/roles/${encodeURIComponent(role)}`, `role ${role}`);
   roleCache.set(role, rep);
   return rep;
+}
+
+async function serviceAccountUserId(clientId: string): Promise<string> {
+  const clients = await adminJson<{ id: string }[]>(`/clients?clientId=${encodeURIComponent(clientId)}`, `client ${clientId}`);
+  if (!clients[0]) throw new IgaError('ENTITY_VANISHED', 404, `client ${clientId} not found`);
+  const user = await adminJson<{ id: string }>(`/clients/${encodeURIComponent(clients[0].id)}/service-account-user`, `sa user ${clientId}`);
+  return user.id;
 }
 
 interface IgaCrRep {
@@ -82,60 +124,73 @@ interface IgaCrRep {
   entityType?: string;
   entityId?: string;
   actionType?: string;
+  rows?: Record<string, string>[];
   authorizationCount?: number;
   threshold?: number;
   createdAt?: number;
   resolvedAt?: number | null;
 }
 
-async function listRaw(status?: string): Promise<IgaCrRep[]> {
-  const res = await adminFetch(`/iga/change-requests${status ? `?status=${encodeURIComponent(status)}` : ''}`);
-  if (!res.ok) await fail(res, 'list change-requests');
-  const body = await res.json();
-  return Array.isArray(body) ? body : [];
+async function listRaw(status: string): Promise<IgaCrRep[]> {
+  const body = await adminJson<unknown>(`/iga/change-requests?status=${encodeURIComponent(status)}`, 'list change-requests');
+  return Array.isArray(body) ? (body as IgaCrRep[]) : [];
 }
 
 function toChangeRequest(r: IgaCrRep): ChangeRequest {
+  const t = tracked.get(r.id);
   return {
     id: r.id,
     status: r.status ?? 'UNKNOWN',
-    summary: [r.actionType, r.entityType, r.entityId].filter(Boolean).join(' '),
+    summary: t
+      ? `Cấp ${ROLES.EXCEPTION_SUBMIT} cho ${t.agentClientId || 'agent'} (PO ${t.poId})`
+      : [r.actionType, r.entityType, r.entityId].filter(Boolean).join(' '),
     approvals: Number(r.authorizationCount ?? 0),
-    required: Number(r.threshold || 2), // [inferred] threshold 0 = not computed yet; schema default is 2
-    updated_at: Number(r.resolvedAt ?? r.createdAt ?? Date.now()), // [inferred] epoch ms
+    required: Number(r.threshold ?? 1), // measured threshold=1 on test1
+    updated_at: Number(r.resolvedAt ?? r.createdAt ?? Date.now()), // epoch ms (measured)
   };
 }
 
-export async function listChangeRequests(status?: string): Promise<ChangeRequest[]> {
+/** status defaults to PENDING: IGA returns [] when no status is given [measured]. */
+export async function listChangeRequests(status = 'PENDING'): Promise<ChangeRequest[]> {
   return (await listRaw(status)).map(toChangeRequest);
 }
 
+export async function getChangeRequest(id: string): Promise<ChangeRequest> {
+  return toChangeRequest(await adminJson<IgaCrRep>(`/iga/change-requests/${encodeURIComponent(id)}`, `change-request ${id}`));
+}
+
 /**
- * Propose removing a realm role from a user. Under IGA the DELETE is captured (202) and becomes a
- * change request that needs approver quorum.
+ * Open the exception CR (D7): GRANT proc.exception-submit → the agent's service-account user.
+ * Approvers authorize it in TideCloak; governance.ts watches it. Revoking afterwards is a manual CR.
  */
-export async function revokeRole(sub: string, role: string): Promise<{ change_request_id: string }> {
-  const rep = await getRoleRep(role);
-  const res = await adminFetch(`/users/${encodeURIComponent(sub)}/role-mappings/realm`, {
-    method: 'DELETE',
+export async function openExceptionRequest(poId: string, agentClientId: string): Promise<{ change_request_id: string }> {
+  const saUser = await serviceAccountUserId(agentClientId);
+  const rep = await getRoleRep(ROLES.EXCEPTION_SUBMIT);
+  const held = await adminJson<{ name?: string }[]>(`/users/${encodeURIComponent(saUser)}/role-mappings/realm`, 'role mappings');
+  if (held.some((r) => r.name === ROLES.EXCEPTION_SUBMIT)) {
+    throw new IgaError('ROLE_STILL_GRANTED', 409, `${agentClientId} still holds ${ROLES.EXCEPTION_SUBMIT}; approve a revoke CR first`);
+  }
+  const res = await adminFetch(`/users/${encodeURIComponent(saUser)}/role-mappings/realm`, {
+    method: 'POST',
     body: JSON.stringify([rep]),
   });
-  if (res.status !== 202) {
-    if (res.ok) throw new IgaError('UNEXPECTED', res.status, 'role removed directly: IGA not enabled on realm');
-    await fail(res, 'revoke role');
+  if (!res.ok) await fail(res, 'grant exception role');
+
+  let id: string | undefined;
+  if (res.status === 202) {
+    const body = (await res.json().catch(() => null)) as { changeRequestId?: string } | null;
+    id = body?.changeRequestId;
   }
-  // [inferred] id sources in order: body.changeRequestId, Location tail, newest PENDING CR for this user.
-  const body = (await res.json().catch(() => null)) as { changeRequestId?: string; id?: string } | null;
-  const fromBody = body?.changeRequestId ?? body?.id;
-  if (fromBody) return { change_request_id: fromBody };
-  const loc = res.headers.get('Location');
-  const fromLoc = loc?.split('?')[0].split('/').filter(Boolean).pop();
-  if (fromLoc) return { change_request_id: fromLoc };
-  const mine = (await listRaw('PENDING'))
-    .filter((r) => r.entityId === sub)
-    .sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
-  if (mine[0]) return { change_request_id: mine[0].id };
-  throw new IgaError('UNEXPECTED', 202, 'captured but change request id not found');
+  if (!id) {
+    // D9: 204 (or 202 without id) still created a CR — newest PENDING GRANT_ROLES for this user.
+    const mine = (await listRaw('PENDING'))
+      .filter((r) => r.entityId === saUser && r.actionType === 'GRANT_ROLES')
+      .sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
+    id = mine[0]?.id;
+  }
+  if (!id) throw new IgaError('UNEXPECTED', res.status, 'grant accepted but no change request found (IGA off?)');
+  trackChangeRequest(id, poId, agentClientId);
+  return { change_request_id: id };
 }
 
 function httpStatus(e: IgaError): 403 | 404 | 409 | 412 | 502 {
@@ -145,10 +200,10 @@ function httpStatus(e: IgaError): 403 | 404 | 409 | 412 | 502 {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function registerIgaRoutes(app: Hono<any>) {
   app.get('/api/change-requests', async (c) => {
-    const roles = c.get('roles') as string[] | undefined; // set by track C's auth middleware, if mounted
+    const roles = c.get('roles') as string[] | undefined; // set by P1 auth middleware, if mounted
     if (Array.isArray(roles) && !roles.includes(ROLES.APPROVER)) return c.json({ error: 'forbidden' }, 403);
     try {
-      const items = await listChangeRequests(c.req.query('status') || undefined);
+      const items = (await listChangeRequests(c.req.query('status') || undefined)).map((cr) => ({ ...cr, po_id: poIdFor(cr.id) }));
       return c.json({ items } satisfies ChangeRequestsRes);
     } catch (e) {
       if (e instanceof IgaError) return c.json({ error: e.message, code: e.code }, httpStatus(e));

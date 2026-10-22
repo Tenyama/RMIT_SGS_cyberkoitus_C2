@@ -1,95 +1,71 @@
-# Realm `tidewatch` — manual setup checklist
+# Realm `test1` — ProcureGuard identity & governance
 
-Auto-bootstrap is dropped (CONTRACTS D10). Do this once in the admin console
-<http://localhost:8080/admin/master/console/> (admin / admin), top to bottom. ~15 min.
+Realm `test1` on the local TideCloak (<http://localhost:8080>, master admin `admin` / `admin`) is
+Tide-licensed with **IGA ON** (attestor = tide) — CONTRACTS D3. Everything below already exists or is
+done by a human in the admin console; the app never creates realm objects.
 
-Tags: `[measured]` = probed on this TideCloak build (throwaway realm `tidewatch-scratch`, 2026-10-22);
-`[inferred]` = from docs / bytecode, not run.
+Tags: `[measured]` = probed on test1 2026-10-22; `[inferred]` = from docs/code, not run.
 
-## 0. Order matters (IGA)
-Enabling IGA turns **every existing** realm entity into a pending `ADOPT_*` change request, and
-clients stay unusable until adopted (`tidewatch-sa` client_credentials → `401 invalid_client`) `[measured]`.
-So: create everything in §1–§5 first, enable IGA/Tide in §6 last, then approve the adopt CRs.
+## 1. Who holds what
+| Principal | Kind | Holds | Purpose |
+|---|---|---|---|
+| `agent-analyst` | confidential client, service account | realm role `agent.analyst` | reads inventory + offers |
+| `agent-planner` | confidential client, service account | realm role `agent.planner` (+ `proc.exception-submit` **only** while an approved exception CR is in force) | drafts / submits POs |
+| `agent-exception` | confidential client, service account | realm role `agent.exception` | writes exception reports |
+| `staff1` | user | `proc.buyer` | runs agents, sees PO board |
+| `monitor1` | user | `proc.auditor` | audit chain |
+| `approver1`, `approver2`, `approver3` | users | `realm-management` → `tide-realm-admin` (after each links their Tide account) | sign change requests in TideCloak |
+| `tidewatch-sa` | confidential client, service account | `realm-management` → `view-realm`, `view-events`, `manage-users`, `manage-realm` | server → Admin/IGA API: **opens and reads** CRs, never approves |
+| `tidewatch-app` | public client | — | browser login for the web app |
 
-## 1. Realm
-- [ ] Realm dropdown → **Create realm** → Realm name `tidewatch` → Create.
-- [ ] Realm settings → **Tokens** → Access Token Lifespan = **1 minute** (60 s, D8) → Save.
-- [ ] Realm settings → **Events** → User events settings: Save events **ON**; Admin events settings: Save events **ON**, Include representation **ON** → Save.
+- `tide-realm-admin` can only be granted to a user linked to Tide: otherwise `400 target user is not linked to the Tide identity provider` `[measured]`.
+- `tidewatch-sa` must **not** get `tide-realm-admin`; without `manage-realm` the IGA list returns 403 `[measured]`.
+- Status now: `tidewatch-sa` gets a token (200) but `GET /iga/change-requests` → 403 (0 PENDING CRs at 14:25, so its realm-management roles are not assigned/approved yet) `[measured 14:25]`.
 
-## 2. Clients
-`tidewatch-app` (browser login):
-- [ ] Clients → Create client → Client ID `tidewatch-app` → Next.
-- [ ] Client authentication **OFF** (public), Standard flow **ON** → Next.
-- [ ] Root URL `http://localhost:5137`, Valid redirect URIs `http://localhost:5137/*`,
-      Valid post logout redirect URIs `http://localhost:5137/*`, Web origins `http://localhost:5137` → Save.
+## 2. IGA rules the app relies on
+- Every realm change (role grant, client edit, …) returns **202 `{changeRequestId}`** or sometimes **204**, and only takes effect after approval (D9) `[measured]`.
+- **One pending CR per entity**: a 2nd change to the same user/client → `409 Resolve or deny it before requesting this change` `[measured]`. So an agent can have only one open exception at a time.
+- Statuses: `PENDING` → `APPROVED` (change applied) / `DENIED`. `GET /iga/change-requests` **without** `?status=` returns `[]`; always pass one `[measured]`.
+- CR fields: `id, realmId, entityType, entityId, actionType, rows[{USER_ID, ROLE_ID}], status, createdAt, resolvedAt, authorizationCount, authorizers[{username,timestamp}], readyToCommit, threshold, requiredApproverRoles, scopeMode, dependsOn, blocked` `[measured]`. Threshold on test1 = 1 `[measured]`.
 
-`tidewatch-sa` (server → Admin/IGA API):
-- [ ] Clients → Create client → Client ID `tidewatch-sa` → Next.
-- [ ] Client authentication **ON**, Standard flow **OFF**, Direct access **OFF**, Service accounts roles **ON** → Save.
-- [ ] Tab **Credentials** → copy Client secret → put it in `.env` at repo root as `SA_CLIENT_SECRET=...`.
-- [ ] Tab **Service accounts roles** → Assign role → Filter by clients → `realm-management` →
-      tick **view-realm**, **view-events**, **manage-users**, **manage-realm** → Assign.
-  - `manage-realm` is required: `GET /iga/change-requests` calls `requireManageRealm()`; without it the list returns **403** `[measured]`.
-  - Do **NOT** give it `tide-realm-admin` (approver role) — the server must never be able to authorize.
+## 3. Exception flow (D7)
+1. Planner submits a PO over its authority → server (`server/src/iga.ts` `openExceptionRequest`) POSTs
+   `proc.exception-submit` to `agent-planner`'s service-account user → CR `GRANT_ROLES` opens.
+2. Approver opens <http://localhost:8080/admin/master/console/#/test1> → **Change requests** → reviews → approves with Tide enclave.
+3. `server/src/governance.ts` polls every 3 s, sees `APPROVED`, planner re-submits with a fresh token, PO executes once.
+4. **Manual revoke (limitation):** the role stays on `agent-planner` until a human removes it:
+   Users → filter service-account `service-account-agent-planner` → Role mapping → unassign `proc.exception-submit`
+   → approve the resulting CR. Until then a new exception request fails with `ROLE_STILL_GRANTED`
+   (and the server honours the role only for the one approved PO).
 
-## 3. Realm roles (= `ROLES` in `shared/types.ts`)
-Realm roles → Create role, once per row:
-- [ ] `_tide_kyc.selfencrypt` — customer (CUSTOMER)
-- [ ] `_tide_kyc.selfdecrypt` — staff (STAFF)
-- [ ] `tw-monitor` — monitor (MONITOR)
-- [ ] `tw-platform` — platform (PLATFORM)
-
-APPROVER is the client role `tide-realm-admin` on `realm-management` (created by TideCloak in Tide realms) — not a realm role.
-
-## 4. Users
-Users → Add user (Email verified ON) → Create → **Credentials** → Set password (Temporary OFF) → **Role mapping** → Assign role.
-
-| Username | Password | Roles |
-|---|---|---|
-| `customer1` | `customer1` | realm `_tide_kyc.selfencrypt` |
-| `staff1` | `staff1` | realm `_tide_kyc.selfdecrypt` |
-| `monitor1` | `monitor1` | realm `tw-monitor` |
-| `platform1` | `platform1` | realm `tw-platform` |
-| `approver1`, `approver2`, `approver3` | same as username | client `realm-management` → `tide-realm-admin` (Filter by clients) |
-
-Tide logins go through the Tide enclave, so passwords only matter if the realm still allows plain login.
-
-## 5. Adapter config for the web app
-- [ ] Clients → `tidewatch-app` → top-right **Action** → **Download adapter config** → format *Keycloak OIDC JSON* → Download.
-      (TideCloak may also show this under the Tide/IGA "Settings" page as `tidecloak.json`.)
-- [ ] Save it as `web/public/tidecloak.json` (gitignored). Must contain `"realm": "tidewatch"`,
-      `"auth-server-url": "http://localhost:8080"`, `"resource": "tidewatch-app"` (+ Tide `vendorId`/`homeOrkUrl` keys after §6).
-
-## 6. Tide enrolment + IGA (needs a human with a browser)
-- [ ] Realm `tidewatch` → Tide / Identity providers → **tide** IdP: set it up / Activate license as the console prompts (same steps used for realm `test1`).
-- [ ] Enable IGA: Realm settings → IGA toggle **ON** (REST equivalent: `POST /admin/realms/tidewatch/tide-admin/toggle-iga` form `isIGAEnabled=true` → 200 `[measured]` on the scratch realm). `test1` shows realm attributes `isIGAEnabled=true`, `iga.attestor=tide` `[measured]`.
-- [ ] Change requests tab → approve every `ADOPT_*` request (scratch realm: master admin `authorize` + `commit` → 200/200 ×224 `[measured]`; with the Tide attestor the console will ask for enclave sign-off `[inferred]`).
-- [ ] For each of `approver1..3`: log in once at <http://localhost:8080/realms/tidewatch/account> → **Link Tide account** (enclave pops up, create/link Tide account). Admin console → Users → user → check the Tide link/`vuid` attribute is present.
-- [ ] Re-download `tidecloak.json` (§5) after the Tide IdP is set up so the Tide keys are included.
-
-## 7. Smoke checks
+## 4. Fetch the agent secrets into `.env` (master admin, read-only)
+Run from the repo root:
 ```bash
-# SA token (expects 200 + access_token)
-curl -s -d grant_type=client_credentials -d client_id=tidewatch-sa -d client_secret="$SA_CLIENT_SECRET" \
-  http://localhost:8080/realms/tidewatch/protocol/openid-connect/token | head -c 120; echo
-# IGA list via the SA (expects 200 [] ; 403 => manage-realm missing)
-TOK=$(curl -s -d grant_type=client_credentials -d client_id=tidewatch-sa -d client_secret="$SA_CLIENT_SECRET" \
-  http://localhost:8080/realms/tidewatch/protocol/openid-connect/token | python3 -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')
-curl -s -w ' %{http_code}\n' -H "Authorization: Bearer $TOK" 'http://localhost:8080/admin/realms/tidewatch/iga/change-requests?status=PENDING'
+KC=http://localhost:8080
+ADM=$(curl -s -d grant_type=password -d client_id=admin-cli -d username=admin -d password=admin \
+  "$KC/realms/master/protocol/openid-connect/token" | python3 -c 'import sys,json;print(json.load(sys.stdin)["access_token"])')
+secret() {  # $1 = clientId
+  id=$(curl -s -H "Authorization: Bearer $ADM" "$KC/admin/realms/test1/clients?clientId=$1" | python3 -c 'import sys,json;print(json.load(sys.stdin)[0]["id"])')
+  curl -s -H "Authorization: Bearer $ADM" "$KC/admin/realms/test1/clients/$id/client-secret" | python3 -c 'import sys,json;print(json.load(sys.stdin)["value"])'
+}
+sed -i '/^AGENT_\(ANALYST\|PLANNER\|EXCEPTION\)_SECRET=/d' .env
+{
+  echo "AGENT_ANALYST_SECRET=$(secret agent-analyst)"
+  echo "AGENT_PLANNER_SECRET=$(secret agent-planner)"
+  echo "AGENT_EXCEPTION_SECRET=$(secret agent-exception)"
+} >> .env
+grep -c '^AGENT_.*_SECRET=.\+' .env   # expect 3
 ```
+The master admin token lives 60 s; rerun the `ADM=` line if you get 401.
 
-## Known IGA behaviour `[measured]` on `tidewatch-scratch` (IGA on, default attestor)
-- Master admin `DELETE .../users/{id}/role-mappings/realm` → **202** `{"status":"PENDING","changeRequestId":"…","entityType":"USER","actionType":"REVOKE_ROLES"}` + `Location: /admin/realms/{realm}/iga/change-requests/{id}`.
-- Same DELETE with the **`tidewatch-sa` token → 204, role removed immediately (not captured)**. Re-check on the real Tide realm before the demo; if still 204, propose-revoke must use an admin user token instead of the SA (or accept the bypass and say so to the judges).
-- Role **grant** (`POST role-mappings`) → 204, applied directly even as master admin.
-- `createdAt` in CR JSON is epoch ms; `threshold` defaulted to 1 on the scratch realm.
+Same for `SA_CLIENT_SECRET`: `echo "SA_CLIENT_SECRET=$(secret tidewatch-sa)" >> .env`.
 
-## 8. Export realm JSON into the repo
-UI: Realm settings → top-right **Action** → **Partial export** → Include groups and roles ON, Include clients ON → Export → save as `infra/realm/tidewatch-realm.json`.
-(Partial export masks client secrets as `**********`; re-set `SA_CLIENT_SECRET` after any import.)
-
-CLI alternative (full, includes users):
+## 5. Quick checks
 ```bash
-docker compose exec tidecloak /opt/keycloak/bin/kc.sh export --realm tidewatch --users realm_file --file /tmp/tidewatch-realm.json
-docker compose cp tidecloak:/tmp/tidewatch-realm.json infra/realm/tidewatch-realm.json
+# pending CRs (count)
+curl -s -H "Authorization: Bearer $ADM" "$KC/admin/realms/test1/iga/change-requests?status=PENDING" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)))'
+# does agent-planner still hold the exception role?
+SAU=$(curl -s -H "Authorization: Bearer $ADM" "$KC/admin/realms/test1/clients?clientId=agent-planner" | python3 -c 'import sys,json;print(json.load(sys.stdin)[0]["id"])')
+SAU=$(curl -s -H "Authorization: Bearer $ADM" "$KC/admin/realms/test1/clients/$SAU/service-account-user" | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+curl -s -H "Authorization: Bearer $ADM" "$KC/admin/realms/test1/users/$SAU/role-mappings/realm" | python3 -c 'import sys,json;print([r["name"] for r in json.load(sys.stdin)])'
 ```
