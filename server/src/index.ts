@@ -292,6 +292,10 @@ export async function mountOptional(app: Hono<AppEnv>, opts: { governance: boole
   if (typeof iga?.registerIgaRoutes === 'function') iga.registerIgaRoutes(app);
   if (!opts.governance) return;
   const gov = await optionalImport(GOV_SPEC);
+  // Offline demo only: stands in for the TideCloak quorum. Real mode has no such route.
+  if (process.env.AUTH_MODE === 'dev' && typeof gov?.simulateApproval === 'function') {
+    app.post('/api/demo/approve/:id', (c) => c.json(gov.simulateApproval(c.req.param('id'))));
+  }
   if (typeof gov?.startGovernance === 'function') {
     gov.startGovernance({
       onApproved: async (id: string) => {
