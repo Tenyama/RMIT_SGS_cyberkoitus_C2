@@ -42,3 +42,9 @@ scrape_configs:
     scrape_interval: 5s
     static_configs:
       - targets: ["tidecloak:9000"]
+  # Tide Watch server: tidewatch_* + simulated tide_ork_* series.
+  - job_name: tidewatch
+    scrape_interval: 5s
+    metrics_path: /api/metrics
+    static_configs:
+      - targets: ["server:4000"]
