@@ -59,7 +59,6 @@ Requirements: Docker, **Node.js 22** (Node 26's V8 breaks `better-sqlite3` — s
 
 ```bash
 git clone https://github.com/Tenyama/RMIT_SGS_cyberkoitus_C2.git && cd RMIT_SGS_cyberkoitus_C2
-git checkout procure            # skip if this is already on main
 npm run install:all
 # npm 12 blocks install scripts by default — approve the native ones, then reinstall
 cd server && npm install-scripts approve better-sqlite3 esbuild && cd ../web && npm install-scripts approve @tidecloak/js esbuild && cd ..
