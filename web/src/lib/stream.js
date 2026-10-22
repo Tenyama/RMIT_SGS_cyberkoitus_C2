@@ -1,7 +1,22 @@
-// SSE client for GET /api/stream (CONTRACTS: JWT via ?access_token= because EventSource has no headers).
+// SSE client for GET /api/stream. EventSource has no headers, so auth goes in the query:
+// real mode ?access_token=<jwt>; dev mode ?dev_sub=&dev_roles= (CONTRACTS D8).
 // openStream(token, onEvent, onStatus?) -> close()
-// `token` may be a string or a () => string|null getter (so reconnects pick up a refreshed token).
-const TYPES = ['node.state', 'key.margin', 'alert.opened', 'alert.updated', 'cr.updated', 'decrypt.rate', 'tidecloak.health', 'heartbeat'];
+// `token` may be a string or a getter returning string|null|Promise (reconnects pick up a refreshed token).
+import { DEV } from "./api.js";
+
+const TYPES = ["inventory.updated", "po.updated", "agent.log", "cr.updated", "heartbeat"];
+
+export function streamUrl(token, dev = DEV) {
+  const q = new URLSearchParams();
+  if (dev) {
+    q.set("dev_sub", dev.sub);
+    q.set("dev_roles", dev.roles.join(","));
+  } else if (token) {
+    q.set("access_token", token);
+  }
+  const s = q.toString();
+  return "/api/stream" + (s ? `?${s}` : "");
+}
 
 export function openStream(token, onEvent, onStatus = () => {}) {
   let es = null;
@@ -19,15 +34,17 @@ export function openStream(token, onEvent, onStatus = () => {}) {
     }
   };
 
-  function connect() {
+  async function connect() {
     if (closed) return;
-    const t = typeof token === 'function' ? token() : token;
-    es = new EventSource('/api/stream' + (t ? `?access_token=${encodeURIComponent(t)}` : ''));
-    es.onopen = () => { retry = 1000; onStatus('open'); };
+    let t = null;
+    try { t = typeof token === "function" ? await token() : token; } catch { t = null; }
+    if (closed) return;
+    es = new EventSource(streamUrl(t));
+    es.onopen = () => { retry = 1000; onStatus("open"); };
     es.onmessage = handle(null); // unnamed events
     for (const n of TYPES) es.addEventListener(n, handle(n)); // named events (`event: <type>`)
     es.onerror = () => {
-      onStatus('error');
+      onStatus("error");
       // Browser retries on its own unless the stream is CLOSED (e.g. 401/403); then back off and reopen.
       if (es.readyState === EventSource.CLOSED && !closed) {
         es.close();
@@ -42,6 +59,6 @@ export function openStream(token, onEvent, onStatus = () => {}) {
     closed = true;
     clearTimeout(timer);
     if (es) es.close();
-    onStatus('closed');
+    onStatus("closed");
   };
 }
