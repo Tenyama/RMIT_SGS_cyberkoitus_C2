@@ -9,7 +9,7 @@ Types: `shared/types.ts`. Schema: `server/schema.sql`. Design: `docs/DESIGN.md`.
 | D2 | Server = Node 18 + Hono + better-sqlite3 + jose + vitest@2, `tsx` | Host Node 18.19.1 |
 | D3 | Realm = `test1` (already Tide-licensed, IGA on) | `tidewatch` licence setup failed on Tide's ORK network `[measured]` |
 | D4 | Agents are TideCloak confidential clients; they call our HTTP API with their own token | Enforcement must not trust in-process callers |
-| D5 | Quantities/limits are deterministic; Claude only chooses supplier among offers, writes text, and may *propose* bad things | LLM is never the authority |
+| D5 | Quantities/limits are deterministic; the reasoner only chooses supplier among offers, writes text, and may *propose* bad things | LLM is never the authority |
 | D6 | LLM layer = pluggable `Reasoner` interface (`server/src/llm.ts`); MVP ships a deterministic rule-based reasoner only (no API key available). It must still be able to *simulate a compromised model* (follow an injected supplier note) so the policy engine is demonstrably the authority | No Anthropic key; demo must not depend on a network LLM |
 | D7 | Exception approval = IGA CR "GRANT `proc.exception-submit` → agent-planner" opened by `tidewatch-sa`; IGA status `APPROVED`/`COMMITTED` = approved, `DENIED` = rejected | Uses Tide quorum, not an app table |
 | D8 | `AUTH_MODE=dev` accepts `X-Dev-Sub` + `X-Dev-Roles` (comma list); agents in dev mode send their role via these headers | Tests/offline |
