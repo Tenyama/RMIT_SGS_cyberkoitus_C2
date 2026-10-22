@@ -100,7 +100,7 @@ describe('openExceptionRequest', () => {
 
 describe('getChangeRequest / listChangeRequests', () => {
   it('maps authorizationCount/threshold', async () => {
-    expect(await getChangeRequest('cr-1')).toEqual({ id: 'cr-1', status: 'APPROVED', summary: expect.stringContaining('GRANT_ROLES'), approvals: 1, required: 1, updated_at: 200 });
+    expect(await getChangeRequest('cr-1')).toMatchObject({ id: 'cr-1', status: 'APPROVED', summary: expect.stringContaining('GRANT_ROLES'), approvals: 1, required: 1, updated_at: 200 });
   });
 
   it('404 → ENTITY_VANISHED', async () => {

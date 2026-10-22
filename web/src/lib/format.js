@@ -88,6 +88,14 @@ export function mergeById(fetched, current) {
 // Simulated quorum (server AUTH_MODE=dev + SIM_QUORUM=1) uses change request ids "sim-<po id>".
 export const isSimulatedCr = (id) => String(id || "").startsWith("sim-");
 
+// Short human label for a change request id: simulated ones stay readable, uuids get truncated.
+export function shortCrId(id) {
+  const s = String(id || "");
+  if (!s) return "";
+  if (isSimulatedCr(s)) return "simulated request";
+  return s.length <= 10 ? s : `${s.slice(0, 8)}…`;
+}
+
 // Agent log: entries are { key, run, agent, step, message, ts }. Keep the newest `max` entries and
 // return runs newest-first, each with its entries newest-first.
 export const MAX_LOG_ENTRIES = 40;

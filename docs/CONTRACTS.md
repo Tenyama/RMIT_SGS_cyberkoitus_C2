@@ -37,6 +37,7 @@ Load with `set -a; . ./.env; set +a` (no dotenv).
 |---|---|---|---|
 | GET | `/me` | any | P1 |
 | GET | `/inventory` | inventory:read | P1 |
+| PATCH | `/inventory/:sku` | inventory:edit | P1 |
 | GET | `/suppliers?sku=` | supplier:read | P1 |
 | POST | `/po` | po:draft | P1 |
 | POST | `/po/:id/submit` | po:submit (+ quorum path) | P1 (calls P3 `openExceptionRequest`) |
@@ -47,7 +48,7 @@ Load with `set -a; . ./.env; set +a` (no dotenv).
 | GET | `/audit` | audit:read | P1 |
 | GET | `/stream` | any (`?access_token=` or dev query) | P1 |
 | GET | `/change-requests` | APPROVER | P3 |
-| POST | `/demo/reset`, `/demo/attack` | demo:inject | P1 |
+| POST | `/demo/reset`, `/demo/attack`, `/demo/preset` | demo:inject | P1 |
 | POST | `/demo/approve/:id` | dev mode only — stands in for the quorum | orchestrator |
 | GET | `/health` | none | P1 |
 

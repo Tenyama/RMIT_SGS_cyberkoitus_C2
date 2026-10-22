@@ -25,6 +25,7 @@ export type AgentName = keyof typeof AGENT_CLIENTS;
 
 export type Permission =
   | 'inventory:read'
+  | 'inventory:edit'
   | 'supplier:read'
   | 'po:read'
   | 'po:draft'
@@ -39,7 +40,7 @@ export const PERMISSIONS: Record<string, Permission[]> = {
   [ROLES.AGENT_ANALYST]: ['inventory:read', 'supplier:read'],
   [ROLES.AGENT_PLANNER]: ['inventory:read', 'supplier:read', 'po:draft', 'po:submit'],
   [ROLES.AGENT_EXCEPTION]: ['inventory:read', 'supplier:read', 'po:read', 'exception:report'],
-  [ROLES.BUYER]: ['inventory:read', 'supplier:read', 'po:read', 'agents:run', 'demo:inject'],
+  [ROLES.BUYER]: ['inventory:read', 'inventory:edit', 'supplier:read', 'po:read', 'agents:run', 'demo:inject'],
   [ROLES.AUDITOR]: ['po:read', 'audit:read', 'inventory:read'],
 };
 
@@ -138,10 +139,12 @@ export interface AuditEntry {
 export interface ChangeRequest {
   id: string;
   status: string; // raw IGA status: PENDING | APPROVED | DENIED | COMMITTED
+  title?: string; // friendly one-liner, e.g. "Exception request · PO-ab12cd34"
   summary: string;
   approvals: number;
   required: number;
   updated_at: number;
+  po_id?: string | null; // linked purchase order, when the server knows it
 }
 
 // ---------- SSE /api/stream ----------
@@ -177,8 +180,20 @@ export interface PoListRes { items: PurchaseOrder[] }
 // POST /api/agents/run          (agents:run) -> 202 { run_id } ; progress via agent.log events
 export interface AgentsRunRes { run_id: string }
 
+// PATCH /api/inventory/:sku     (inventory:edit) body InventoryPatchReq -> 200 { product, recommendation }
+export interface InventoryPatchReq {
+  on_hand?: number;          // integer >= 0
+  avg_daily_demand?: number; // >= 0
+  safety_stock?: number;     // integer >= 0
+}
+
 // POST /api/demo/inject         (demo:inject) body { enabled: boolean } -> 200
 //   enabled=true writes a malicious note into the unapproved supplier's offer.
+
+// POST /api/demo/preset         (demo:inject) body { name: DemoPresetName } -> 200 DemoPresetRes
+//   Resets the demo, then applies a named scenario for judges to explore.
+export type DemoPresetName = 'routine' | 'stockout-crisis' | 'big-ticket' | 'price-spike' | 'injection';
+export interface DemoPresetRes { ok: true; preset: DemoPresetName; description: string; injected: boolean }
 
 // GET /api/audit                (audit:read) -> { items: AuditEntry[]; valid: boolean }
 export interface AuditRes { items: AuditEntry[]; valid: boolean }

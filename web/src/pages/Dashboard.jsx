@@ -5,13 +5,22 @@ import { api } from "../lib/api.js";
 import { openStream } from "../lib/stream.js";
 import {
   MAX_LOG_ENTRIES, PO_COLUMNS, STATUS_LINE, computeKpis, formatNum, formatTime, formatVND,
-  groupLogsByRun, groupPosByStatus, isSimulatedCr, mergeById, upsertById,
+  groupLogsByRun, groupPosByStatus, isSimulatedCr, mergeById, shortCrId, upsertById,
 } from "../lib/format.js";
 
 const AGENT_LABEL = { analyst: "Analyst", planner: "Planner", exception: "Exception" };
 const STOCK_LABEL = { stockout_risk: "Stockout risk", ok: "OK", overstock: "Overstock" };
 const REC_LABEL = { approve: "Recommend approve", reject: "Recommend reject", investigate: "Investigate" };
 const TIDE_CONSOLE_URL = "http://localhost:8080/admin/master/console/#/test1";
+
+// Judge scenarios (server resets, then tweaks the deterministic inputs). Keep in sync with server PRESETS.
+const PRESETS = [
+  { id: "routine", name: "Routine day", hint: "4 SKUs below reorder point — all orders auto-execute" },
+  { id: "stockout-crisis", name: "Stockout crisis", hint: "6 restocks needed; the last one crosses the 30M daily cap → quorum" },
+  { id: "big-ticket", name: "Big-ticket order", hint: "Brick demand spiked → ~43M order → needs quorum" },
+  { id: "price-spike", name: "Price spike", hint: "Approved cement +28% → blocked as price anomaly" },
+  { id: "injection", name: "Prompt injection", hint: "Poisoned supplier note → agent obeys → blocked" },
+];
 
 export default function Dashboard({ getToken }) {
   const tokRef = useRef(getToken);
@@ -35,6 +44,7 @@ export default function Dashboard({ getToken }) {
   const logSeq = useRef(0);
   const [injected, setInjected] = useState(false);
   const [notice, setNotice] = useState(null); // { tone, text }
+  const [editingSku, setEditingSku] = useState(null); // sku whose inventory row is being edited
 
   const loadInventory = useCallback(async () => {
     const r = await call("/inventory");
@@ -85,14 +95,14 @@ export default function Dashboard({ getToken }) {
     return close;
   }, [call, loadAll, loadInventory]);
 
-  // Runs one POST per action id at a time; the ref guards against double clicks before re-render.
-  const act = async (id, path, body, okText) => {
+  // Runs one request per action id at a time; the ref guards against double clicks before re-render.
+  const act = async (id, path, body, okText, method = "POST") => {
     if (busyRef.current[id]) return null;
     busyRef.current = { ...busyRef.current, [id]: true };
     setBusy(busyRef.current);
     setNotice(null);
     try {
-      const r = await call(path, { method: "POST", body: body ?? {} });
+      const r = await call(path, { method, body: body ?? {} });
       if (okText) setNotice({ tone: "ok", text: okText(r) });
       return r ?? {};
     } catch (e) {
@@ -145,6 +155,26 @@ export default function Dashboard({ getToken }) {
       loadAll();
     }
   };
+  const applyPreset = async (preset) => {
+    const r = await act(`preset-${preset.id}`, "/demo/preset", { name: preset.id }, (res) => `${preset.name}: ${res?.description ?? "applied"}`);
+    if (r !== null) {
+      setLogs([]);
+      setRuns({});
+      setCrs({});
+      setPos([]);
+      setEditingSku(null);
+      runRef.current = null;
+      if (typeof r.injected === "boolean") setInjected(r.injected);
+      loadAll();
+    }
+  };
+  const saveInventory = (sku, form) =>
+    act(`inv-${sku}`, `/inventory/${encodeURIComponent(sku)}`, form, (res) => {
+      const r = res?.recommendation;
+      return `${sku} updated — ${r?.status === "stockout_risk" ? `now at risk, reorder ${formatNum(r.recommended_qty)}` : "within stock norms"}`;
+    }, "PATCH").then((r) => {
+      if (r !== null) setEditingSku(null);
+    });
   const simApprove = (po) =>
     act(`approve-${po.id}`, `/demo/approve/${encodeURIComponent(po.id)}`, {}, () =>
       `Simulated quorum approval for ${po.id} — the planner will re-submit`,
@@ -199,6 +229,23 @@ export default function Dashboard({ getToken }) {
           <span className="dot" /> {conn === "open" ? "Live" : conn === "connecting" ? "Connecting…" : "Offline"}
         </span>
       </section>
+
+      <section className="preset-row">
+        <span className="preset-label">Scenarios</span>
+        {PRESETS.map((p) => (
+          <button
+            key={p.id}
+            className="btn small-btn preset"
+            title={p.hint}
+            disabled={anyBusy}
+            aria-busy={!!busy[`preset-${p.id}`]}
+            onClick={() => applyPreset(p)}
+          >
+            {busy[`preset-${p.id}`] ? <><span className="spinner" aria-hidden="true" /> Applying…</> : p.name}
+          </button>
+        ))}
+        <span className="muted small">each resets the warehouse, then changes the inputs — the rules never change</span>
+      </section>
       {notice && <div className={`alert ${notice.tone}`}>{notice.text}</div>}
 
       <div className="main-grid">
@@ -239,44 +286,104 @@ export default function Dashboard({ getToken }) {
         </section>
       </div>
 
-      <details className="panel inv-panel">
+      <details className="panel inv-panel" open={!!editingSku || undefined}>
         <summary>
           <h2>Inventory &amp; reorder points</h2>
-          <span className="muted small">{inv.products.length} SKUs</span>
+          <span className="muted small">{inv.products.length} SKUs · click Edit to change the inputs — the reorder math updates live</span>
         </summary>
         <div className="table-wrap">
           <table className="table">
             <thead>
               <tr>
                 <th>SKU</th><th>Product</th><th className="num">On hand</th><th className="num">On order</th>
-                <th className="num">Demand/day</th><th className="num">Reorder point</th>
-                <th className="num">Recommended</th><th>Status</th>
+                <th className="num">Demand/day</th><th className="num">Safety stock</th><th className="num">Reorder point</th>
+                <th className="num">Recommended</th><th>Status</th><th></th>
               </tr>
             </thead>
             <tbody>
-              {inv.products.map((p) => {
-                const r = recBySku[p.sku];
-                return (
-                  <tr key={p.sku}>
-                    <td><code>{p.sku}</code></td>
-                    <td>{p.name}</td>
-                    <td className="num">{formatNum(p.on_hand)} <span className="muted small">{p.unit}</span></td>
-                    <td className="num">{formatNum(p.on_order)}</td>
-                    <td className="num">{formatNum(p.avg_daily_demand)}</td>
-                    <td className="num">{r ? formatNum(r.reorder_point) : "—"}</td>
-                    <td className="num"><b>{r ? formatNum(r.recommended_qty) : "—"}</b></td>
-                    <td>{r && <span className={`chip ${r.status}`}>{STOCK_LABEL[r.status] ?? r.status}</span>}</td>
-                  </tr>
-                );
-              })}
+              {inv.products.map((p) => (
+                <InvRow
+                  key={`${p.sku}-${p.on_hand}-${p.avg_daily_demand}-${p.safety_stock}`}
+                  p={p}
+                  rec={recBySku[p.sku]}
+                  editing={editingSku === p.sku}
+                  saving={!!busy[`inv-${p.sku}`]}
+                  onEdit={() => setEditingSku(p.sku)}
+                  onCancel={() => setEditingSku(null)}
+                  onSave={(form) => saveInventory(p.sku, form)}
+                />
+              ))}
               {!inv.products.length && (
-                <tr><td colSpan={8} className="muted">No inventory data yet.</td></tr>
+                <tr><td colSpan={10} className="muted">No inventory data yet.</td></tr>
               )}
             </tbody>
           </table>
         </div>
       </details>
     </div>
+  );
+}
+
+// One inventory row; switches to editable inputs for the reorder-math inputs (on hand / demand / safety).
+function InvRow({ p, rec, editing, saving, onEdit, onCancel, onSave }) {
+  const [form, setForm] = useState({ on_hand: String(p.on_hand), avg_daily_demand: String(p.avg_daily_demand), safety_stock: String(p.safety_stock) });
+  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+  const submit = (e) => {
+    e.preventDefault();
+    onSave({
+      on_hand: Number(form.on_hand),
+      avg_daily_demand: Number(form.avg_daily_demand),
+      safety_stock: Number(form.safety_stock),
+    });
+  };
+  if (editing) {
+    return (
+      <tr className="inv-editing">
+        <td><code>{p.sku}</code></td>
+        <td>{p.name}</td>
+        <td className="num">
+          <form id={`inv-form-${p.sku}`} onSubmit={submit}>
+            <input className="inv-input" type="number" min="0" step="1" required aria-label="On hand"
+              value={form.on_hand} onChange={set("on_hand")} disabled={saving} /> <span className="muted small">{p.unit}</span>
+          </form>
+        </td>
+        <td className="num">{formatNum(p.on_order)}</td>
+        <td className="num">
+          <input form={`inv-form-${p.sku}`} className="inv-input" type="number" min="0" step="0.1" required aria-label="Demand per day"
+            value={form.avg_daily_demand} onChange={set("avg_daily_demand")} disabled={saving} />
+        </td>
+        <td className="num">
+          <input form={`inv-form-${p.sku}`} className="inv-input" type="number" min="0" step="1" required aria-label="Safety stock"
+            value={form.safety_stock} onChange={set("safety_stock")} disabled={saving} />
+        </td>
+        <td className="num muted" colSpan={2}>recalculates on save</td>
+        <td></td>
+        <td className="num row-actions">
+          <button form={`inv-form-${p.sku}`} type="submit" className="btn small-btn primary" disabled={saving}>
+            {saving ? <><span className="spinner" aria-hidden="true" /> Saving…</> : "Save"}
+          </button>
+          <button type="button" className="btn small-btn ghost" disabled={saving} onClick={onCancel}>
+            Cancel
+          </button>
+        </td>
+      </tr>
+    );
+  }
+  return (
+    <tr>
+      <td><code>{p.sku}</code></td>
+      <td>{p.name}</td>
+      <td className="num">{formatNum(p.on_hand)} <span className="muted small">{p.unit}</span></td>
+      <td className="num">{formatNum(p.on_order)}</td>
+      <td className="num">{formatNum(p.avg_daily_demand)}</td>
+      <td className="num">{formatNum(p.safety_stock)}</td>
+      <td className="num">{rec ? formatNum(rec.reorder_point) : "—"}</td>
+      <td className="num"><b>{rec ? formatNum(rec.recommended_qty) : "—"}</b></td>
+      <td>{rec && <span className={`chip ${rec.status}`}>{STOCK_LABEL[rec.status] ?? rec.status}</span>}</td>
+      <td className="num row-actions">
+        <button className="btn small-btn ghost" onClick={onEdit}>Edit</button>
+      </td>
+    </tr>
   );
 }
 
@@ -380,10 +487,14 @@ function PoCard({ po, name, supplier, cr, approving, onSimApprove }) {
       {pending && po.change_request_id && (
         <div className="cta">
           <div className="cta-info">
-            <span className="muted small">Change request</span> <code>{po.change_request_id}</code>
+            <span className="cr-title">Exception request</span>
+            <code className="muted small" title={po.change_request_id}>{shortCrId(po.change_request_id)}</code>
             <span className="cta-q">
               {cr?.required != null ? `${cr.approvals ?? 0}/${cr.required} approvals` : "awaiting approvals"}
             </span>
+          </div>
+          <div className="muted small">
+            This order exceeds the agent's authority. Approving grants a one-time exception for this order only.
           </div>
           {isSimulatedCr(po.change_request_id) ? (
             <button className="btn small-btn primary" disabled={approving} onClick={onSimApprove}>
@@ -397,7 +508,9 @@ function PoCard({ po, name, supplier, cr, approving, onSimApprove }) {
         </div>
       )}
       {!pending && po.change_request_id && (
-        <div className="muted small">CR <code>{po.change_request_id}</code>{cr?.status ? ` · ${cr.status}` : ""}</div>
+        <div className="muted small" title={po.change_request_id}>
+          Exception request <code>{shortCrId(po.change_request_id)}</code>{cr?.status ? ` · ${cr.status}` : ""}
+        </div>
       )}
 
       <button className="link-btn" onClick={() => setDetails((d) => !d)} aria-expanded={details}>
